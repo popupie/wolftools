@@ -1,0 +1,35 @@
+{
+  "name": "wolftools",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "bin": {
+    "wolftools": "bin/wolftools.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "start": "node bin/wolftools.mjs",
+    "test": "vitest run",
+    "web": "node bin/wolftools.mjs web",
+    "inspect": "node bin/wolftools.mjs inspect",
+    "unpack": "node bin/wolftools.mjs unpack",
+    "pack": "node bin/wolftools.mjs pack"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "vitest": "^2.1.8"
+  },
+  "packageManager": "pnpm@11.7.0",
+  "license": "MIT"
+}
