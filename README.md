@@ -1,6 +1,6 @@
 # wolftools
 
-Wolf Tools is a standalone command line tool for WOLF RPG Editor games. It can
+wolftools is a standalone command line tool for WOLF RPG Editor games. It can
 inspect WOLF files, prepare a Browser Woditor website, unpack supported archives,
 and create supported archives.
 
@@ -9,13 +9,13 @@ and create supported archives.
 WOLF RPG Editor creates Windows games. Browser Woditor provides the WebAssembly
 runtime needed to run a compatible creator export in a browser.
 
-Wolf Tools brings the related tasks into one command.
+wolftools brings the related tasks into one command.
 
-Use Wolf Tools only with a game you own or are authorized to process.
+Use wolftools only with a game you own or are authorized to process.
 
 ## App Flow
 
-1. Install Wolf Tools.
+1. Install wolftools.
 2. Inspect a game or archive when you need format information.
 3. Use web with a native game or Browser Woditor ready creator release.
 4. Use unpack to extract supported archives into a new folder.
@@ -23,7 +23,7 @@ Use Wolf Tools only with a game you own or are authorized to process.
 
 ## Install
 
-Wolf Tools needs Node.js 22 or newer and pnpm 10 or newer.
+wolftools needs Node.js 22 or newer and pnpm 10 or newer.
 
 Install dependencies:
 
@@ -62,15 +62,15 @@ Create a website directly from a game folder:
 wolftools web "/path/to/Game" "./output/Web Game"
 ```
 
-Wolf Tools finds `Game.exe` or `GamePro.exe`, unpacks the supported WOLF
+wolftools finds `Game.exe` or `GamePro.exe`, unpacks the supported WOLF
 archives, adds the Browser Woditor marker, and writes the game files into the
 website. It accepts games with a Data folder and games with one `Data.wolf`
-beside the executable. If an older game has no `Game.ini`, Wolf Tools creates a
+beside the executable. If an older game has no `Game.ini`, wolftools creates a
 safe default for the browser export. The original game is not changed.
 
 Native games use asset by asset loading. The website has a small `Data.wolf`
 startup archive containing only the Browser Woditor marker. Maps, images,
-audio, and game databases are separate files under `Data`. Wolf Tools adds a
+audio, and game databases are separate files under `Data`. wolftools adds a
 manifest and a loader that gives Browser Woditor each file when the game first opens it.
 
 This avoids downloading the complete game at startup. A file can cause a short
@@ -97,7 +97,7 @@ Unpack the archives found through a game executable:
 wolftools unpack "/path/to/Game.exe" "./output/Unpacked Game"
 ```
 
-Wolf Tools supports packing and unpacking native DX version 6 archives created
+wolftools supports packing and unpacking native DX version 6 archives created
 with WOLF RPG Editor 2.20. This includes encrypted archives and compressed file
 data.
 
@@ -138,7 +138,7 @@ game needs them.
 
 ## Privacy
 
-Game files stay on your computer. Wolf Tools does not upload them.
+Game files stay on your computer. wolftools does not upload them.
 
 Browser Woditor is downloaded from its official project site when required. A
 checksum is verified before it is used. Pack and unpack do not use the network.
