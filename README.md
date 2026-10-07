@@ -1,4 +1,4 @@
-# Wolf Tools
+# wolftools
 
 Wolf Tools is a standalone command line tool for WOLF RPG Editor games. It can
 inspect WOLF files, prepare a Browser Woditor website, unpack supported archives,
