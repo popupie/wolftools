@@ -12,7 +12,7 @@ Use wolftools only with games you own or have permission to work with.
 - `web` creates a [Browser Woditor](https://frostyhowl.com/browser-woditor/) website.
 - `unpack` extracts archive files into a new folder.
 - `pack` creates archives from folders.
-- `serve` starts a local web server for testing.
+- `serve` starts a local web server for testing/playing.
 
 ## Install
 
@@ -47,7 +47,7 @@ wolftools inspect "/path/to/Game"
 The report shows the versions, archive types, and encryption modes it can
 detect. It also shows whether wolftools supports the archive format.
 
-## Create a website
+## Create a website version
 
 ### Create a separate copy
 
