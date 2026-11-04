@@ -6,6 +6,7 @@ import { packWolf } from "./pack.mjs";
 import { unpackWolf, unpackWolfInPlace } from "./unpack.mjs";
 import { inspectCombinedGame, packageWolfGame } from "./web.mjs";
 import { serveWebExport } from "./serve.mjs";
+import { migrateWebExport } from "./migrate.mjs";
 
 export function helpText() {
   return `wolftools
@@ -13,6 +14,7 @@ export function helpText() {
 Usage:
   wolftools inspect <game folder, EXE, or archive>
   wolftools web <game folder or EXE> [output folder] [runtime zip] [--separate=true|false]
+  wolftools web <export or combined game folder> --migrate
   wolftools serve <website or combined game folder> [port]
   wolftools unpack <game folder, EXE, or archive> [output folder]
   wolftools pack <folder, game, or project> [mode] [output]
@@ -22,16 +24,19 @@ Usage:
 Web options:
   --separate=true   Create a new website folder. Do not change the game. (default)
   --separate=false  Add web/ to the game folder. Share its existing Data/ assets.
+  --migrate         Update an existing export in place, preserving its settings and save identity.
 
 Combined mode needs Game.exe or GamePro.exe and an unpacked Data/ folder.
 If archives are found, wolftools asks before extracting them in the game folder.
 This removes the archives and may break the game. Make a backup first.
-Both modes stop with an error if the game already has web/.
+Creating a new export stops with an error if the game already has web/.
+Use --migrate to update an existing export instead.
 Serve a combined game from its game folder, not only web/.
 
 Examples:
   wolftools web "/path/to/Game" "./output/Web Game"
   wolftools web "/path/to/Game" --separate=false
+  wolftools web "/path/to/Game/web" --migrate
   wolftools serve "/path/to/Game"
 
 Pack detects the mode from Game.exe when possible. A plain folder uses 2.20.
@@ -73,10 +78,14 @@ function requireCount(command, values, minimum, maximum) {
 function webArguments(values) {
   const positional = [];
   let separate = true;
+  let migrate = false;
   let seen = false;
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
-    if (value === "--separate" || value.startsWith("--separate=")) {
+    if (value === "--migrate") {
+      if (migrate) throw new Error("--migrate may only be specified once.");
+      migrate = true;
+    } else if (value === "--separate" || value.startsWith("--separate=")) {
       if (seen) throw new Error("--separate may only be specified once.");
       const raw =
         value === "--separate"
@@ -90,8 +99,10 @@ function webArguments(values) {
       throw new Error(`Unknown web option: ${value}`);
     } else positional.push(value);
   }
-  requireCount("web", positional, 1, 3);
-  return { positional, separate };
+  if (migrate && seen)
+    throw new Error("Migration detects the existing layout. Omit --separate.");
+  requireCount("web", positional, 1, migrate ? 1 : 3);
+  return { positional, separate, migrate };
 }
 
 export async function runCli(
@@ -111,7 +122,13 @@ export async function runCli(
     return formatInspection(await inspectPath(values[0]));
   }
   if (command === "web") {
-    const { positional, separate } = webArguments(values);
+    const { positional, separate, migrate } = webArguments(values);
+    if (migrate) {
+      const result = await migrateWebExport({ exportDir: positional[0] });
+      return result.migrated
+        ? `Migrated web export from version ${result.previousVersion} to ${result.version}.\nOutput: ${result.outputDir}\n`
+        : `Web export is already at version ${result.version}. No files were changed.\nOutput: ${result.outputDir}`;
+    }
     if (!separate) {
       const state = await inspectCombinedGame(positional[0]);
       if (state.needsExtraction) {

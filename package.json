@@ -25,7 +25,8 @@
     "pack": "node bin/wolftools.mjs pack"
   },
   "dependencies": {
-    "jszip": "^3.10.1"
+    "jszip": "^3.10.1",
+    "music-metadata": "^11.16.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

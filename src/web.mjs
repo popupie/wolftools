@@ -22,8 +22,12 @@ import { packDx8NoKeyArchive } from "./archive/dx8.mjs";
 import { unpackWolf } from "./unpack.mjs";
 import { isArchivePath } from "./files.mjs";
 import { inspectFile } from "./inspect.mjs";
+import { browserAudioMetadata } from "./audio.mjs";
+import { createDeferredAudioLoader } from "./browser/deferred-audio.mjs";
+import { installLazyAssets } from "./browser/lazy-assets.mjs";
 
 export const BROWSER_WODITOR_VERSION = "0.6.2.0";
+export const WEB_EXPORT_VERSION = "2026.11.04";
 export const BROWSER_WODITOR_URL =
   "https://frostyhowl.com/files/BrowserWoditor_0_6_2_0.zip";
 export const BROWSER_WODITOR_SHA256 =
@@ -176,170 +180,27 @@ async function browserWoditorMarker(zip) {
 }
 
 export function lazyAssetLoaderSource({ sharedAssets = false } = {}) {
-  return `(() => {
-  const loaderScript = document.currentScript;
-  if (!loaderScript?.src) {
-    throw new Error("Could not determine the WOLF game folder URL.");
+  return `(${installLazyAssets.toString()})(${JSON.stringify(sharedAssets)}, ${createDeferredAudioLoader.toString()}, ${JSON.stringify(WEB_EXPORT_VERSION)});\n`;
+}
+
+export function indexWithLazyAssetLoader(index) {
+  const woditorScript =
+    /<script\b[^>]*\bsrc=["'](?:\.\/)?woditor\.js(?:\?[^"']*)?["'][^>]*>\s*<\/script>/i;
+  if (!woditorScript.test(index)) {
+    throw new Error("The runtime index does not load woditor.js.");
   }
-  const exportRoot = new URL("../", loaderScript.src);
-  const gameRoot = new URL(${JSON.stringify(sharedAssets ? "../" : "./")}, exportRoot);
-
-  function readManifest() {
-    const manifestUrl = new URL("asset_manifest.json", exportRoot);
-    const request = new XMLHttpRequest();
-    request.open("GET", manifestUrl.href, false);
-    request.send(null);
-    if (request.status < 200 || request.status >= 300) {
-      throw new Error(\`Could not load the WOLF asset manifest. HTTP \${request.status}\`);
-    }
-    try {
-      return JSON.parse(request.responseText);
-    } catch {
-      throw new Error(\`The WOLF asset manifest URL returned invalid JSON: \${manifestUrl.href}\`);
-    }
-  }
-
-  const manifest = readManifest();
-  const available = new Map();
-  for (const file of manifest.files) {
-    const storedPath = normalize(file.path);
-    for (const key of pathKeys(storedPath)) available.set(key, storedPath);
-  }
-
-  const stats = { requests: 0, bytes: 0, files: [], missing: [] };
-  window.WolfLazyAssetStats = stats;
-  const reportedMissing = new Set();
-
-  function normalize(path) {
-    const parts = String(path).replaceAll("\\\\", "/").split("/");
-    const normalized = [];
-    for (const part of parts) {
-      if (!part || part === ".") continue;
-      if (part === "..") normalized.pop();
-      else normalized.push(part);
-    }
-    return normalized.join("/");
-  }
-
-  function pathKeys(path) {
-    const keys = new Set();
-    const normalized = normalize(path);
-    for (const candidate of new Set([
-      normalized,
-      normalized.normalize("NFC"),
-      normalized.normalize("NFD"),
-    ])) {
-      const lower = candidate.toLowerCase();
-      keys.add(lower);
-      if (lower.startsWith("data/")) keys.add(candidate.slice(5).toLowerCase());
-      const dataOffset = lower.lastIndexOf("/data/");
-      if (dataOffset >= 0) keys.add(candidate.slice(dataOffset + 1).toLowerCase());
-    }
-    return Array.from(keys);
-  }
-
-  function assetUrl(path) {
-    const encoded = path.split("/").map(encodeURIComponent).join("/");
-    return new URL(encoded, gameRoot).href;
-  }
-
-  function ensureParents(path) {
-    const parts = path.split("/");
-    parts.pop();
-    let current = "";
-    for (const part of parts) {
-      current += \`/\${part}\`;
-      if (!FS.analyzePath(current).exists) FS.mkdir(current);
-    }
-  }
-
-  function load(path) {
-    const requested = normalize(path);
-    const relative = pathKeys(requested)
-      .map((key) => available.get(key))
-      .find((candidate) => candidate !== undefined);
-    if (!relative) {
-      const lower = requested.toLowerCase();
-      if (
-        lower.includes("data/") &&
-        /\.[^/.]{1,8}$/u.test(requested) &&
-        !lower.includes("-gamecache/") &&
-        !lower.includes("-save/") &&
-        !lower.endsWith(".wolf") &&
-        !lower.endsWith(".wolfx") &&
-        !reportedMissing.has(lower)
-      ) {
-        reportedMissing.add(lower);
-        stats.missing.push(requested);
-        console.debug(\`Wolf Tools could not match asset: \${requested}\`);
-      }
-      return false;
-    }
-
-    const absolute = \`/\${requested}\`;
-    if (FS.analyzePath(absolute).exists) return true;
-
-    const request = new XMLHttpRequest();
-    request.open("GET", assetUrl(relative), false);
-    request.overrideMimeType("text/plain; charset=x-user-defined");
-    request.send(null);
-    if (request.status < 200 || request.status >= 300) {
-      throw new Error(\`Could not load WOLF asset \${relative}. HTTP \${request.status}\`);
-    }
-
-    const bytes = new Uint8Array(request.responseText.length);
-    for (let index = 0; index < bytes.length; index += 1) {
-      bytes[index] = request.responseText.charCodeAt(index) & 255;
-    }
-    ensureParents(requested);
-    FS.writeFile(absolute, bytes);
-    stats.requests += 1;
-    stats.bytes += bytes.byteLength;
-    stats.files.push(relative);
-    console.log(\`Wolf Tools loaded asset: \${relative} (\${bytes.byteLength} bytes)\`);
-    return true;
-  }
-
-  Module.preRun.push(() => {
-    // Shared support files (fonts/INI lists) live beside Game.exe, not in web/.
-    for (const path of manifest.preload || []) load(path);
-    const originalOpen = FS.open;
-    const originalStat = FS.stat;
-    const originalLstat = FS.lstat;
-
-    FS.open = function(path, flags) {
-      const readOnly = typeof flags === "string"
-        ? !/[wa+]/.test(flags)
-        : (flags & 3) === 0;
-      if (readOnly) load(path);
-      return originalOpen.apply(FS, arguments);
-    };
-    FS.stat = function(path) {
-      load(path);
-      return originalStat.apply(FS, arguments);
-    };
-    FS.lstat = function(path) {
-      load(path);
-      return originalLstat.apply(FS, arguments);
-    };
-  });
-})();
-`;
+  const loaderTag =
+    `<script type="text/javascript" src="lib/lazy_assets.js?wolftools-export=${WEB_EXPORT_VERSION}"></script>`;
+  const previousLoader = /<script\b[^>]*\bsrc=["'](?:\.\/)?lib\/lazy_assets\.js(?:\?[^"']*)?["'][^>]*>\s*<\/script>/gi;
+  return index.replace(previousLoader, "").replace(woditorScript, `${loaderTag}\n  $&`);
 }
 
 async function addLazyAssetLoader(outputDir, options) {
   const indexPath = join(outputDir, "index.html");
   const index = await readFile(indexPath, "utf8");
-  const woditorScript =
-    /<script\b[^>]*\bsrc=["']woditor\.js["'][^>]*><\/script>/i;
-  if (!woditorScript.test(index)) {
-    throw new Error("The runtime index does not load woditor.js.");
-  }
-  const loaderTag =
-    '<script type="text/javascript" src="lib/lazy_assets.js"></script>';
   await writeFile(
     indexPath,
-    index.replace(woditorScript, `${loaderTag}\n  $&`),
+    indexWithLazyAssetLoader(index),
   );
   await mkdir(join(outputDir, "lib"), { recursive: true });
   await writeFile(
@@ -451,7 +312,13 @@ async function createAssetManifest(dataDir) {
   let bytes = 0;
   for (const path of paths) {
     const size = (await stat(join(dataDir, path))).size;
-    files.push({ path: `Data/${path}`, bytes: size });
+    let audio;
+    try {
+      audio = await browserAudioMetadata(join(dataDir, path));
+    } catch (error) {
+      console.warn(`${error.message} This file will use the existing asset loader if requested.`);
+    }
+    files.push({ path: `Data/${path}`, bytes: size, ...(audio ? { audio } : {}) });
     bytes += size;
   }
   return { version: 1, files, bytes };
@@ -712,6 +579,7 @@ export async function packageWolfGame({
       join(staging, "browser-game.json"),
       `${JSON.stringify(
         {
+          exportVersion: WEB_EXPORT_VERSION,
           title: gameTitle,
           engine: "wolf-rpg",
           runtime: `Browser Woditor ${BROWSER_WODITOR_VERSION}`,

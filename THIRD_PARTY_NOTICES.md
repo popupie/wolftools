@@ -1,6 +1,8 @@
 # Third Party Notices
 
-Wolf Tools uses JSZip under the MIT license.
+wolftools uses JSZip under the MIT license.
+Audio metadata parsing uses music-metadata under the MIT license:
+https://github.com/Borewit/music-metadata
 
 Portions of the WOLF archive encryption and WOLF RPG Editor Pro key
 compatibility are based on UberWolf by Sinflower, used under the MIT license:
