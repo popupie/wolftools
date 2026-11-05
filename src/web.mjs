@@ -13,7 +13,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import JSZip from "jszip";
@@ -118,29 +118,65 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function getRuntimeCachePath(version) {
+  const dir = join(homedir(), ".cache", "wolftools", "runtime");
+  const fileName = `browser-woditor-${version}.zip`;
+  return join(dir, fileName);
+}
+
 async function loadRuntimeZip({ runtimeZipPath, runtimeUrl, runtimeSha256 }) {
   let bytes;
   if (runtimeZipPath) {
     bytes = await readFile(resolve(runtimeZipPath));
   } else {
-    process.stdout.write(
-      `Downloading Browser Woditor ${BROWSER_WODITOR_VERSION}...\n`,
-    );
-    const response = await fetch(runtimeUrl, { redirect: "follow" });
-    if (!response.ok) {
-      throw new Error(
-        `Browser Woditor download failed (${response.status} ${response.statusText}).`,
-      );
-    }
-    bytes = Buffer.from(await response.arrayBuffer());
-  }
+    const cachePath = getRuntimeCachePath(BROWSER_WODITOR_VERSION);
+    let useCache = false;
 
-  if (runtimeSha256) {
-    const actualHash = sha256(bytes);
-    if (actualHash.toLowerCase() !== runtimeSha256.toLowerCase()) {
-      throw new Error(
-        `Browser Woditor ZIP checksum mismatch. Expected ${runtimeSha256}, received ${actualHash}.`,
+    // Check if the upstream is already in cache and has the correct checksum
+    if (runtimeSha256) {
+      const hasCachedZip = await exists(cachePath);
+      if (hasCachedZip) {
+        const cachedBytes = await readFile(cachePath);
+        const cachedHash = sha256(cachedBytes);
+        if (cachedHash.toLowerCase() === runtimeSha256.toLowerCase()) {
+          useCache = true;
+          bytes = cachedBytes;
+          process.stdout.write(
+            `Using cached Browser Woditor ${BROWSER_WODITOR_VERSION}...\n`,
+          );
+        }
+      }
+    }
+
+    if (!useCache) {
+      process.stdout.write(
+        `Downloading Browser Woditor ${BROWSER_WODITOR_VERSION}...\n`,
       );
+      const response = await fetch(runtimeUrl, { redirect: "follow" });
+      if (!response.ok) {
+        throw new Error(
+          `Browser Woditor download failed (${response.status} ${response.statusText}).`,
+        );
+      }
+      bytes = Buffer.from(await response.arrayBuffer());
+
+      // Save to cache if we have a SHA256 to verify against
+      if (runtimeSha256) {
+        const actualHash = sha256(bytes);
+        if (actualHash.toLowerCase() === runtimeSha256.toLowerCase()) {
+          await mkdir(dirname(cachePath), { recursive: true });
+          await writeFile(cachePath, bytes);
+        }
+      }
+    }
+
+    if (runtimeSha256) {
+      const actualHash = sha256(bytes);
+      if (actualHash.toLowerCase() !== runtimeSha256.toLowerCase()) {
+        throw new Error(
+          `Browser Woditor ZIP checksum mismatch. Expected ${runtimeSha256}, received ${actualHash}.`,
+        );
+      }
     }
   }
 
