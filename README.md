@@ -9,9 +9,10 @@ Use wolftools only with games you own or have permission to work with.
 ## Choose a command
 
 - `inspect` shows the game version and archive details it can detect.
-- `web` creates a [Browser Woditor](https://frostyhowl.com/browser-woditor/) website.
 - `unpack` extracts archive files into a new folder.
 - `pack` creates archives from folders.
+- `modes` Show all supported pack modes
+- `web` creates a [Browser Woditor](https://frostyhowl.com/browser-woditor/) website.
 - `serve` starts a local web server for testing/playing.
 
 ## Install
@@ -87,8 +88,24 @@ some games, especially Pro games and games with custom protection. Make a
 backup before you agree. Automatic extraction stops if it would overwrite an
 existing file or folder.
 
-If the game folder already contains `web/`, the command stops and does not
-overwrite it.
+### Migrate an existing web export
+
+Update an existing export in place:
+
+```sh
+wolftools web "/path/to/Web Game" --migrate
+```
+
+For a combined export, pass either the game folder or its `web/` folder:
+
+```sh
+wolftools web "/path/to/Game" --migrate
+```
+
+Existing browser saves remain accessible in the same browser profile at the same website origin
+(protocol, hostname and port) and page path.
+
+See update detail [here](#web-export-version)
 
 ### Use a local Browser Woditor ZIP
 
@@ -186,12 +203,6 @@ mode.
 Packing a Pro game is not supported. The tool stops if the game uses
 `GamePro.exe`.
 
-Show all supported pack modes:
-
-```sh
-wolftools modes
-```
-
 ## Privacy and licenses
 
 Game files stay on your computer. wolftools does not upload them.
@@ -206,3 +217,7 @@ Its runtime files are not included in this repository.
 - This project is a work in progress. The source code structure, features, and
   supported formats may change over time. The approach to
   [privacy](#privacy-and-licenses) will remain unchanged.
+
+## Web export version
+
+- `2026.11.04`: Fix Chromium MP3 loading failures with asynchronous.
