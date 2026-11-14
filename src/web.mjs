@@ -13,7 +13,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import JSZip from "jszip";
@@ -118,11 +118,30 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function getRuntimeCachePath(version) {
+  const dir = join(homedir(), ".cache", "wolftools", "runtime");
+  const fileName = `browser-woditor-${version}.zip`;
+  return join(dir, fileName);
+}
+
 async function loadRuntimeZip({ runtimeZipPath, runtimeUrl, runtimeSha256 }) {
+  const expectedHash = runtimeSha256 && runtimeSha256.toLowerCase();
   let bytes;
+  let cachePath;
   if (runtimeZipPath) {
     bytes = await readFile(resolve(runtimeZipPath));
   } else {
+    cachePath = getRuntimeCachePath(BROWSER_WODITOR_VERSION);
+    if (expectedHash && (await exists(cachePath))) {
+      const cachedBytes = await readFile(cachePath);
+      if (sha256(cachedBytes) === expectedHash) {
+        process.stdout.write(
+          `Using cached Browser Woditor ${BROWSER_WODITOR_VERSION}...\n`,
+        );
+        return JSZip.loadAsync(cachedBytes);
+      }
+    }
+
     process.stdout.write(
       `Downloading Browser Woditor ${BROWSER_WODITOR_VERSION}...\n`,
     );
@@ -135,12 +154,16 @@ async function loadRuntimeZip({ runtimeZipPath, runtimeUrl, runtimeSha256 }) {
     bytes = Buffer.from(await response.arrayBuffer());
   }
 
-  if (runtimeSha256) {
+  if (expectedHash) {
     const actualHash = sha256(bytes);
-    if (actualHash.toLowerCase() !== runtimeSha256.toLowerCase()) {
+    if (actualHash !== expectedHash) {
       throw new Error(
         `Browser Woditor ZIP checksum mismatch. Expected ${runtimeSha256}, received ${actualHash}.`,
       );
+    }
+    if (cachePath) {
+      await mkdir(dirname(cachePath), { recursive: true });
+      await writeFile(cachePath, bytes);
     }
   }
 
@@ -161,7 +184,17 @@ async function extractRuntime(zip, outputDir) {
   }
 
   for (const entry of entries) {
-    const outputPath = join(outputDir, entry.name.slice(RUNTIME_PREFIX.length));
+    const path = entry.name.slice(RUNTIME_PREFIX.length);
+    // ZIP paths use forward slashes. Reject names Windows could reinterpret.
+    if (
+      /[\\:\0]/u.test(path) ||
+      path.split("/").some((part) => !part || /[. ]$/u.test(part))
+    ) {
+      throw new Error(
+        `Unsafe file name in runtime ZIP: ${JSON.stringify(entry.name)}`,
+      );
+    }
+    const outputPath = join(outputDir, path);
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, await entry.async("nodebuffer"));
   }
@@ -411,13 +444,24 @@ async function validateSharedGame(sourceDir, kind) {
   if (dataFiles.length === 0) throw new Error("Shared Data folder is empty.");
 }
 
-export async function inspectCombinedGame(sourcePath) {
+function combinedOutputPath(sourceDir, outputDir) {
+  const destination = join(sourceDir, "web");
+  if (outputDir && resolve(outputDir) !== destination) {
+    throw new Error(
+      `Combined mode output must be ${destination}. Omit the output folder or use that path.`,
+    );
+  }
+  return destination;
+}
+
+export async function inspectCombinedGame(sourcePath, { outputDir } = {}) {
   const sourceDir = await normalizeSourceDir(sourcePath);
   if ((await readdir(sourceDir)).some((name) => name.toLowerCase() === "web")) {
     throw new Error(
       `Game folder already contains web/: ${join(sourceDir, "web")}`,
     );
   }
+  combinedOutputPath(sourceDir, outputDir);
   const kind = await sourceKind(sourceDir);
   if (kind !== "native") {
     throw new Error(
@@ -504,12 +548,7 @@ export async function packageWolfGame({
   }
   const destination = separate
     ? resolve(outputDir || `${source} web`)
-    : join(source, "web");
-  if (!separate && outputDir && resolve(outputDir) !== destination) {
-    throw new Error(
-      `Combined mode output must be ${destination}. Omit the output folder or use that path.`,
-    );
-  }
+    : combinedOutputPath(source, outputDir);
   if (
     separate &&
     (source === destination || destination.startsWith(`${source}${sep}`))

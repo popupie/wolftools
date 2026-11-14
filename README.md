@@ -11,7 +11,7 @@ Use wolftools only with games you own or have permission to work with.
 - `inspect` shows the game version and archive details it can detect.
 - `unpack` extracts archive files into a new folder.
 - `pack` creates archives from folders.
-- `modes` Show all supported pack modes
+- `modes` shows all supported pack modes.
 - `web` creates a [Browser Woditor](https://frostyhowl.com/browser-woditor/) website.
 - `serve` starts a local web server for testing/playing.
 
@@ -31,11 +31,15 @@ Make the `wolftools` command available on your computer:
 pnpm link -g
 ```
 
-Show command help:
+Use `--help` to see available commands and `--version` to check the installed
+wolftools version.
 
 ```sh
-wolftools help
+wolftools --help
+wolftools --version
 ```
+
+The short forms are `-h` and `-v`.
 
 ## Inspect
 
@@ -55,11 +59,11 @@ detect. It also shows whether wolftools supports the archive format.
 By default, `web` creates a new folder and does not change the original game:
 
 ```sh
-wolftools web "/path/to/Game" "./output/Web Game"
+wolftools web "/path/to/Game" --out "./output/Web Game"
 ```
 
-This is the same as using `--separate=true`. If you leave out the output path,
-the tool adds ` web` to the game folder's name.
+The default is `--separate true`. If you omit `--out` (`-o`), the tool adds
+` web` to the game folder's name.
 
 wolftools finds `Game.exe` or `GamePro.exe` and extracts supported archives.
 It accepts a game with a `Data/` folder or a `Data.wolf` archive.
@@ -68,18 +72,19 @@ If `Game.ini` is missing, the tool creates a default one for the website.
 
 ### Share one game folder
 
-Use `--separate=false` to keep the Windows EXE and website in the same game
-folder:
+Use `--separate false` or `-s false` to keep the Windows EXE and website in the
+same game folder.
 
 ```sh
-wolftools web "/path/to/Game" --separate=false
+wolftools web "/path/to/Game" --separate false
 wolftools serve "/path/to/Game"
 ```
 
 This adds a `web/` folder. The EXE and browser both use the existing `Data/`
-folder.
+folder. If you pass `--out` in when `--separate false`, it must point to the game's
+`web/` folder.
 
-Combined mode needs unpaced archives in `Data/`. If the game still uses archives,
+Combined mode needs unpacked archives in `Data/`. If the game still uses archives,
 wolftools asks if you want to extract them. The default answer is no.
 
 If you answer yes, wolftools extracts the files into the original game folder
@@ -90,7 +95,7 @@ existing file or folder.
 
 ### Migrate an existing web export
 
-Update an existing export in place:
+Use `--migrate` to update an existing export in place.
 
 ```sh
 wolftools web "/path/to/Web Game" --migrate
@@ -109,16 +114,17 @@ See update detail [here](#web-export-version)
 
 ### Use a local Browser Woditor ZIP
 
-To use a ZIP you already downloaded, add its path as the third value:
+By default, wolftools uses the pinned Browser Woditor ZIP. To use a local copy
+of that ZIP, pass `--runtime` (`-r`).
 
 ```sh
-wolftools web "/path/to/Game" "./output/Web Game" "/path/to/BrowserWoditor.zip"
+wolftools web "/path/to/Game" --out "./output/Web Game" --runtime "/path/to/BrowserWoditor.zip"
 ```
 
 For combined mode:
 
 ```sh
-wolftools web "/path/to/Game" "/path/to/Game/web" "/path/to/BrowserWoditor.zip" --separate=false
+wolftools web "/path/to/Game" -s false -r "/path/to/BrowserWoditor.zip"
 ```
 
 ### Test the website
@@ -129,7 +135,8 @@ For a web export:
 wolftools serve "./output/Web Game"
 ```
 
-The server returns the link to open. Copy and paste it in the URL address bar.
+The server prints the link to open and uses port `4177` by default. Use
+`--port` (`-p`) to choose a different port.
 Click or tap the game screen once to let the browser start audio and the game.
 
 ## Unpack
@@ -137,14 +144,17 @@ Click or tap the game screen once to let the browser start audio and the game.
 Unpack one archive:
 
 ```sh
-wolftools unpack "/path/to/BasicData.wolf" "./output/BasicData"
+wolftools unpack "/path/to/BasicData.wolf" --out "./output/BasicData"
 ```
 
 Unpack the archives found through a game executable:
 
 ```sh
-wolftools unpack "/path/to/Game.exe" "./output/Unpacked Game"
+wolftools unpack "/path/to/Game.exe" -o "./output/Unpacked Game"
 ```
+
+If you omit `--out`, wolftools creates a sibling folder named after the input
+with ` unpacked` appended.
 
 These standard WOLF archive formats are supported. This table does not mean
 that Pro packing is supported.
@@ -178,13 +188,14 @@ new Pro format may not work.
 Pack one folder into one archive:
 
 ```sh
-wolftools pack "/path/to/BasicData" 2.20 "./output/BasicData.wolf"
+wolftools pack "/path/to/BasicData" --out "./output/BasicData.wolf"
 ```
 
-Choose another supported version:
+Choose another pack mode with `--mode` (`-m`). Run `wolftools modes` to list
+supported modes.
 
 ```sh
-wolftools pack "/path/to/BasicData" 3.50 "./output/BasicData.wolf"
+wolftools pack "/path/to/BasicData" --mode 3.50
 ```
 
 Pack the folders inside a game's `Data/` folder:
@@ -198,7 +209,8 @@ subfolders. It makes one archive for each subfolder. The original game is not
 changed. wolftools reads the editor version from `Game.exe` and chooses the
 matching pack mode when possible. If the version cannot be read, it uses
 `2.20`. A plain folder without `Game.exe` also uses `2.20` unless you give a
-mode.
+mode. If you omit `--out`, a plain folder produces a sibling `.wolf` archive
+and a game project produces a sibling folder with ` packed` appended.
 
 Packing a Pro game is not supported. The tool stops if the game uses
 `GamePro.exe`.

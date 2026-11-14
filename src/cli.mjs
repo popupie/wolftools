@@ -1,49 +1,67 @@
 import { createInterface } from "node:readline/promises";
+import { parseArgs } from "node:util";
 
+import packageJson from "../package.json" with { type: "json" };
 import { PACK_MODES } from "./constants.mjs";
 import { formatInspection, inspectPath } from "./inspect.mjs";
 import { packWolf } from "./pack.mjs";
 import { unpackWolf, unpackWolfInPlace } from "./unpack.mjs";
-import { inspectCombinedGame, packageWolfGame } from "./web.mjs";
+import {
+  BROWSER_WODITOR_VERSION,
+  inspectCombinedGame,
+  packageWolfGame,
+} from "./web.mjs";
 import { serveWebExport } from "./serve.mjs";
 import { migrateWebExport } from "./migrate.mjs";
+
+const GLOBAL_OPTIONS = {
+  help: { type: "boolean", short: "h" },
+  version: { type: "boolean", short: "v" },
+};
+
+const OUTPUT_OPTION = { type: "string", short: "o" };
+const COMMAND_OPTIONS = new Map([
+  ["inspect", {}],
+  [
+    "web",
+    {
+      out: OUTPUT_OPTION,
+      separate: { type: "string", short: "s" },
+      runtime: { type: "string", short: "r" },
+      migrate: { type: "boolean" },
+    },
+  ],
+  ["serve", { port: { type: "string", short: "p" } }],
+  ["unpack", { out: OUTPUT_OPTION }],
+  ["pack", { out: OUTPUT_OPTION, mode: { type: "string", short: "m" } }],
+  ["modes", {}],
+  ["help", {}],
+]);
 
 export function helpText() {
   return `wolftools
 
-Usage:
-  wolftools inspect <game folder, EXE, or archive>
-  wolftools web <game folder or EXE> [output folder] [runtime zip] [--separate=true|false]
-  wolftools web <export or combined game folder> --migrate
-  wolftools serve <website or combined game folder> [port]
-  wolftools unpack <game folder, EXE, or archive> [output folder]
-  wolftools pack <folder, game, or project> [mode] [output]
+Usage
+  wolftools inspect <input>
+  wolftools web <input> [--out <folder>] [--runtime <zip>] [--separate <true|false>]
+  wolftools web <input> --migrate
+  wolftools serve <input> [--port <number>]
+  wolftools unpack <input> [--out <folder>]
+  wolftools pack <input> [--out <path>] [--mode <mode>]
   wolftools modes
   wolftools help
+  wolftools --version
 
-Web options:
-  --separate=true   Create a new website folder. Do not change the game. (default)
-  --separate=false  Add web/ to the game folder. Share its existing Data/ assets.
-  --migrate         Update an existing export in place, preserving its settings and save identity.
-
-Combined mode needs Game.exe or GamePro.exe and an unpacked Data/ folder.
-If archives are found, wolftools asks before extracting them in the game folder.
-This removes the archives and may break the game. Make a backup first.
-Creating a new export stops with an error if the game already has web/.
-Use --migrate to update an existing export instead.
-Serve a combined game from its game folder, not only web/.
-
-Examples:
-  wolftools web "/path/to/Game" "./output/Web Game"
-  wolftools web "/path/to/Game" --separate=false
-  wolftools web "/path/to/Game/web" --migrate
-  wolftools serve "/path/to/Game"
-
-Pack detects the mode from Game.exe when possible. A plain folder uses 2.20.
-WOLF RPG Editor Pro packing is not supported. The default server port is 4177.
-Browser playback depends on the game and Browser Woditor.
-
-Use these commands only with games you own or have permission to work with.`;
+Options
+  -h, --help                   Show this help.
+  -v, --version                Show the wolftools version.
+  -o, --out <path>             Set the output path for web, unpack, or pack.
+  -s, --separate <true|false>  Create a separate web export (default: true).
+                               Use false to add web/ to the game and share Data/.
+  -r, --runtime <zip>          Use a local Browser Woditor ZIP for web.
+  -m, --mode <mode>            Choose a WOLF RPG Editor pack mode.
+  -p, --port <number>          Choose the server port (default: 4177).
+      --migrate                Update an existing web export in place.`;
 }
 
 async function askToExtractArchives({ archives }) {
@@ -69,40 +87,33 @@ async function askToExtractArchives({ archives }) {
   }
 }
 
-function requireCount(command, values, minimum, maximum) {
-  if (values.length < minimum || values.length > maximum) {
-    throw new Error(`Wrong number of values for ${command}.\n\n${helpText()}`);
+function requireCount(command, positionals, count) {
+  if (positionals.length !== count || positionals.includes("")) {
+    const expected = count === 1 ? "an input path" : "no positional arguments";
+    throw new Error(`${command} expects ${expected}.\n\n${helpText()}`);
   }
 }
 
-function webArguments(values) {
-  const positional = [];
-  let separate = true;
-  let migrate = false;
-  let seen = false;
-  for (let index = 0; index < values.length; index += 1) {
-    const value = values[index];
-    if (value === "--migrate") {
-      if (migrate) throw new Error("--migrate may only be specified once.");
-      migrate = true;
-    } else if (value === "--separate" || value.startsWith("--separate=")) {
-      if (seen) throw new Error("--separate may only be specified once.");
-      const raw =
-        value === "--separate"
-          ? values[++index]
-          : value.slice("--separate=".length);
-      if (raw !== "true" && raw !== "false")
-        throw new Error("--separate must be true or false.");
-      separate = raw === "true";
-      seen = true;
-    } else if (value.startsWith("--")) {
-      throw new Error(`Unknown web option: ${value}`);
-    } else positional.push(value);
+function parseCommandArgs(args, commandOptions) {
+  const { values, positionals, tokens } = parseArgs({
+    args,
+    options: { ...GLOBAL_OPTIONS, ...commandOptions },
+    allowPositionals: true,
+    tokens: true,
+  });
+  const seen = new Set();
+  for (const token of tokens) {
+    if (token.kind !== "option") continue;
+    const { name, rawName, inlineValue, value } = token;
+    if (seen.has(name))
+      throw new Error(`--${name} may only be specified once.`);
+    seen.add(name);
+    if (inlineValue && rawName.length === 2 && value.startsWith("=")) {
+      values[name] = value.slice(1);
+    }
+    if (values[name] === "") throw new Error(`--${name} requires a value.`);
   }
-  if (migrate && seen)
-    throw new Error("Migration detects the existing layout. Omit --separate.");
-  requireCount("web", positional, 1, migrate ? 1 : 3);
-  return { positional, separate, migrate };
+  return { options: values, positionals };
 }
 
 export async function runCli(
@@ -112,25 +123,53 @@ export async function runCli(
     write = (message) => process.stdout.write(message),
   } = {},
 ) {
-  const [command = "help", ...values] = argv;
-  if (command === "help") return helpText();
+  const [first = "help", ...rest] = argv;
+  const global = first.startsWith("-");
+  const command = global ? "help" : first;
+  const commandOptions = COMMAND_OPTIONS.get(command);
+  if (!commandOptions) {
+    throw new Error(`Unknown command: ${command}\n\n${helpText()}`);
+  }
+
+  const { options, positionals } = parseCommandArgs(
+    global ? argv : rest,
+    commandOptions,
+  );
+  if (options.version) return packageJson.version;
+  if (options.help) return helpText();
+  if (command === "help") {
+    requireCount(command, positionals, 0);
+    return helpText();
+  }
   if (command === "modes") {
+    requireCount(command, positionals, 0);
     return PACK_MODES.map((mode) => `${mode.name}  ${mode.label}`).join("\n");
   }
+
+  requireCount(command, positionals, 1);
+  const [input] = positionals;
   if (command === "inspect") {
-    requireCount(command, values, 1, 1);
-    return formatInspection(await inspectPath(values[0]));
+    return formatInspection(await inspectPath(input));
   }
   if (command === "web") {
-    const { positional, separate, migrate } = webArguments(values);
+    const { out, runtime, separate: layout, migrate } = options;
     if (migrate) {
-      const result = await migrateWebExport({ exportDir: positional[0] });
+      if (out !== undefined || runtime !== undefined || layout !== undefined) {
+        throw new Error(
+          "--migrate updates the export in place. Omit --out, --runtime, and --separate.",
+        );
+      }
+      const result = await migrateWebExport({ exportDir: input });
       return result.migrated
         ? `Migrated web export from version ${result.previousVersion} to ${result.version}.\nOutput: ${result.outputDir}\n`
         : `Web export is already at version ${result.version}. No files were changed.\nOutput: ${result.outputDir}`;
     }
+    if (layout !== undefined && layout !== "true" && layout !== "false") {
+      throw new Error("--separate must be true or false.");
+    }
+    const separate = layout !== "false";
     if (!separate) {
-      const state = await inspectCombinedGame(positional[0]);
+      const state = await inspectCombinedGame(input, { outputDir: out });
       if (state.needsExtraction) {
         if (!(await confirmExtraction(state)))
           return "Cancelled. No files were changed.";
@@ -144,37 +183,33 @@ export async function runCli(
       }
     }
     const result = await packageWolfGame({
-      sourceDir: positional[0],
-      outputDir: positional[1],
-      runtimeZipPath: positional[2],
+      sourceDir: input,
+      outputDir: out,
+      runtimeZipPath: runtime,
       separate,
     });
     return `Created web export for ${result.title}.\nOutput: ${result.outputDir}`;
   }
   if (command === "serve") {
-    requireCount(command, values, 1, 2);
     const result = await serveWebExport({
-      rootDir: values[0],
-      port: values[1] ?? 4177,
+      rootDir: input,
+      port: options.port,
     });
     return `Serving ${result.root}\nOpen: ${result.url}`;
   }
   if (command === "unpack") {
-    requireCount(command, values, 1, 2);
     const result = await unpackWolf({
-      sourcePath: values[0],
-      outputDir: values[1],
+      sourcePath: input,
+      outputDir: options.out,
     });
     return `Unpacked ${result.files} files.\nOutput: ${result.outputDir}`;
   }
   if (command === "pack") {
-    requireCount(command, values, 1, 3);
     const result = await packWolf({
-      sourcePath: values[0],
-      modeName: values[1],
-      outputDir: values[2],
+      sourcePath: input,
+      modeName: options.mode,
+      outputDir: options.out,
     });
     return `Created ${result.archives} archives with ${result.mode.label}.\nOutput: ${result.outputDir}`;
   }
-  throw new Error(`Unknown command: ${command}\n\n${helpText()}`);
 }
