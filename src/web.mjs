@@ -9,7 +9,6 @@ import {
   readdir,
   rename,
   rm,
-  rmdir,
   stat,
   writeFile,
 } from "node:fs/promises";
@@ -222,19 +221,18 @@ export function indexWithLazyAssetLoader(index) {
   if (!woditorScript.test(index)) {
     throw new Error("The runtime index does not load woditor.js.");
   }
-  const loaderTag =
-    `<script type="text/javascript" src="lib/lazy_assets.js?wolftools-export=${WEB_EXPORT_VERSION}"></script>`;
-  const previousLoader = /<script\b[^>]*\bsrc=["'](?:\.\/)?lib\/lazy_assets\.js(?:\?[^"']*)?["'][^>]*>\s*<\/script>/gi;
-  return index.replace(previousLoader, "").replace(woditorScript, `${loaderTag}\n  $&`);
+  const loaderTag = `<script type="text/javascript" src="lib/lazy_assets.js?wolftools-export=${WEB_EXPORT_VERSION}"></script>`;
+  const previousLoader =
+    /<script\b[^>]*\bsrc=["'](?:\.\/)?lib\/lazy_assets\.js(?:\?[^"']*)?["'][^>]*>\s*<\/script>/gi;
+  return index
+    .replace(previousLoader, "")
+    .replace(woditorScript, `${loaderTag}\n  $&`);
 }
 
 async function addLazyAssetLoader(outputDir, options) {
   const indexPath = join(outputDir, "index.html");
   const index = await readFile(indexPath, "utf8");
-  await writeFile(
-    indexPath,
-    indexWithLazyAssetLoader(index),
-  );
+  await writeFile(indexPath, indexWithLazyAssetLoader(index));
   await mkdir(join(outputDir, "lib"), { recursive: true });
   await writeFile(
     join(outputDir, "lib", "lazy_assets.js"),
@@ -349,9 +347,15 @@ async function createAssetManifest(dataDir) {
     try {
       audio = await browserAudioMetadata(join(dataDir, path));
     } catch (error) {
-      console.warn(`${error.message} This file will use the existing asset loader if requested.`);
+      console.warn(
+        `${error.message} This file will use the existing asset loader if requested.`,
+      );
     }
-    files.push({ path: `Data/${path}`, bytes: size, ...(audio ? { audio } : {}) });
+    files.push({
+      path: `Data/${path}`,
+      bytes: size,
+      ...(audio ? { audio } : {}),
+    });
     bytes += size;
   }
   return { version: 1, files, bytes };
@@ -360,8 +364,10 @@ async function createAssetManifest(dataDir) {
 async function findArchives(root, files) {
   const candidates = files.filter(isArchivePath);
   const matches = await Promise.all(
-    candidates.map(async (path) =>
-      /\.wolfx?$/iu.test(path) || (await inspectFile(join(root, path))).native,
+    candidates.map(
+      async (path) =>
+        /\.wolfx?$/iu.test(path) ||
+        (await inspectFile(join(root, path))).native,
     ),
   );
   // .bin and .data can also be ordinary assets. Only detected archive
@@ -454,13 +460,20 @@ function combinedOutputPath(sourceDir, outputDir) {
   return destination;
 }
 
-export async function inspectCombinedGame(sourcePath, { outputDir } = {}) {
-  const sourceDir = await normalizeSourceDir(sourcePath);
-  if ((await readdir(sourceDir)).some((name) => name.toLowerCase() === "web")) {
+async function requireNoWebEntry(sourceDir) {
+  const entry = (await readdir(sourceDir)).find(
+    (name) => name.toLowerCase() === "web",
+  );
+  if (entry) {
     throw new Error(
-      `Game folder already contains web/: ${join(sourceDir, "web")}`,
+      `Game folder already contains this path: ${join(sourceDir, entry)}`,
     );
   }
+}
+
+export async function inspectCombinedGame(sourcePath, { outputDir } = {}) {
+  const sourceDir = await normalizeSourceDir(sourcePath);
+  await requireNoWebEntry(sourceDir);
   combinedOutputPath(sourceDir, outputDir);
   const kind = await sourceKind(sourceDir);
   if (kind !== "native") {
@@ -541,11 +554,7 @@ export async function packageWolfGame({
     throw new Error("separate must be true or false.");
   const source = await normalizeSourceDir(sourceDir);
   // Check before reading/downloading a runtime or starting any extraction.
-  if ((await readdir(source)).some((name) => name.toLowerCase() === "web")) {
-    throw new Error(
-      `Game folder already contains web/: ${join(source, "web")}`,
-    );
-  }
+  await requireNoWebEntry(source);
   const destination = separate
     ? resolve(outputDir || `${source} web`)
     : combinedOutputPath(source, outputDir);
@@ -574,15 +583,7 @@ export async function packageWolfGame({
     runtimeUrl,
     runtimeSha256,
   });
-  let reserved = false;
-
   try {
-    if (!separate) {
-      // Exclusive reservation closes the check/create race. Only this empty
-      // reservation is removed on failure; never recursively delete web/.
-      await mkdir(destination);
-      reserved = true;
-    }
     await mkdir(staging, { recursive: true });
     process.stdout.write("Preparing Browser Woditor runtime...\n");
     await extractRuntime(runtimeZip, staging);
@@ -645,23 +646,18 @@ export async function packageWolfGame({
       `${[...downloadableFiles, ...saveFiles].join("\r\n")}\r\n`,
     );
 
-    if (separate) {
-      await rename(staging, destination);
-    } else {
-      // Windows cannot rename over an existing directory, even our empty
-      // reservation. Publish into that exclusively-created folder without
-      // replacing any file another process might have placed there.
-      await cp(staging, destination, {
-        recursive: true,
-        force: false,
-        errorOnExist: true,
-      });
-      await rm(staging, { recursive: true, force: true });
-    }
-    reserved = false;
+    // Keep web/ absent until the export is complete and ready to publish.
+    if (!separate) await requireNoWebEntry(source);
+    await rename(staging, destination);
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
-    if (reserved) await rmdir(destination).catch(() => {});
+    if (
+      !separate &&
+      error.syscall === "rename" &&
+      ["EEXIST", "ENOTEMPTY", "EPERM"].includes(error.code)
+    ) {
+      await requireNoWebEntry(source);
+    }
     throw error;
   }
 
