@@ -232,5 +232,6 @@ Its runtime files are not included in this repository.
 
 ## Web export version
 
+- `2026.11.17.1`: Updates Browser Woditor to 0.6.3.0.
 - `2026.11.17`: Keeps the canvas at native size or smaller in a normal window.
 - `2026.11.04`: Fix Chromium MP3 loading failures with asynchronous.

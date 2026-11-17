@@ -12,11 +12,12 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { BROWSER_AUDIO_EXTENSIONS, browserAudioMetadata } from "./audio.mjs";
 import { requireDirectory, requireFile } from "./files.mjs";
 import {
-  BROWSER_WODITOR_VERSION,
+  BROWSER_WODITOR_0_6_3_0,
   WEB_EXPORT_VERSION,
   indexWithCanvasFit,
   indexWithLazyAssetLoader,
   lazyAssetLoaderSource,
+  loadRuntimeZip,
 } from "./web.mjs";
 
 async function details(path) {
@@ -90,11 +91,6 @@ async function deferredAudioUpdates(outputDir, metadata) {
   if (metadata.data?.delivery === "archive") return updates;
   if (metadata.data?.delivery !== "files")
     throw new Error("Unsupported web export asset layout.");
-  if (metadata.runtime !== `Browser Woditor ${BROWSER_WODITOR_VERSION}`) {
-    throw new Error(
-      `This migration requires Browser Woditor ${BROWSER_WODITOR_VERSION}.`,
-    );
-  }
   if (
     metadata.data.manifest !== "asset_manifest.json" ||
     metadata.data.root !== "Data"
@@ -158,11 +154,26 @@ async function canvasFitUpdates(outputDir, _metadata, pending) {
     : new Map([["index.html", fittedIndex]]);
 }
 
+async function browserWoditor063Updates(_outputDir, metadata) {
+  const zip = await loadRuntimeZip(BROWSER_WODITOR_0_6_3_0);
+  const updates = new Map();
+  // These are the runtime files that changed since 0.6.2.0.
+  for (const path of ["lib/system.js", "woditor.js", "woditor.wasm"]) {
+    const entry = zip.file(`public/${path}`);
+    if (!entry)
+      throw new Error(`The runtime ZIP does not contain public/${path}.`);
+    updates.set(path, await entry.async("nodebuffer"));
+  }
+  metadata.runtime = `Browser Woditor ${BROWSER_WODITOR_0_6_3_0.runtimeVersion}`;
+  return updates;
+}
+
 // Release versions stay fixed until a new migration is introduced. Additional
 // releases on the same date use .1, .2, etc..
 const migrations = [
   { version: "2026.11.04", prepare: deferredAudioUpdates },
   { version: "2026.11.17", prepare: canvasFitUpdates },
+  { version: "2026.11.17.1", prepare: browserWoditor063Updates },
 ];
 
 async function applyUpdates(outputDir, updates) {

@@ -25,12 +25,17 @@ import { browserAudioMetadata } from "./audio.mjs";
 import { createDeferredAudioLoader } from "./browser/deferred-audio.mjs";
 import { installLazyAssets } from "./browser/lazy-assets.mjs";
 
-export const BROWSER_WODITOR_VERSION = "0.6.2.0";
-export const WEB_EXPORT_VERSION = "2026.11.17";
-export const BROWSER_WODITOR_URL =
-  "https://frostyhowl.com/files/BrowserWoditor_0_6_2_0.zip";
-export const BROWSER_WODITOR_SHA256 =
-  "50d525af26cfa597c402bfb527d1af66ca6b8db993e019079489e5e50cf91f20";
+export const BROWSER_WODITOR_0_6_3_0 = {
+  runtimeVersion: "0.6.3.0",
+  runtimeUrl: "https://frostyhowl.com/files/BrowserWoditor_0_6_3_0.zip",
+  runtimeSha256: "32b8b899a0e1e003b24b613ab86effe45a66f2ef1173aa4824a12380e55930fa",
+};
+export const {
+  runtimeVersion: BROWSER_WODITOR_VERSION,
+  runtimeUrl: BROWSER_WODITOR_URL,
+  runtimeSha256: BROWSER_WODITOR_SHA256,
+} = BROWSER_WODITOR_0_6_3_0;
+export const WEB_EXPORT_VERSION = "2026.11.17.1";
 
 const RUNTIME_PREFIX = "public/";
 const SOURCE_FILES = [
@@ -123,26 +128,31 @@ function getRuntimeCachePath(version) {
   return join(dir, fileName);
 }
 
-async function loadRuntimeZip({ runtimeZipPath, runtimeUrl, runtimeSha256 }) {
+export async function loadRuntimeZip({
+  runtimeZipPath,
+  runtimeVersion = BROWSER_WODITOR_VERSION,
+  runtimeUrl = BROWSER_WODITOR_URL,
+  runtimeSha256 = BROWSER_WODITOR_SHA256,
+} = {}) {
   const expectedHash = runtimeSha256 && runtimeSha256.toLowerCase();
   let bytes;
   let cachePath;
   if (runtimeZipPath) {
     bytes = await readFile(resolve(runtimeZipPath));
   } else {
-    cachePath = getRuntimeCachePath(BROWSER_WODITOR_VERSION);
+    cachePath = getRuntimeCachePath(runtimeVersion);
     if (expectedHash && (await exists(cachePath))) {
       const cachedBytes = await readFile(cachePath);
       if (sha256(cachedBytes) === expectedHash) {
         process.stdout.write(
-          `Using cached Browser Woditor ${BROWSER_WODITOR_VERSION}...\n`,
+          `Using cached Browser Woditor ${runtimeVersion}...\n`,
         );
         return JSZip.loadAsync(cachedBytes);
       }
     }
 
     process.stdout.write(
-      `Downloading Browser Woditor ${BROWSER_WODITOR_VERSION}...\n`,
+      `Downloading Browser Woditor ${runtimeVersion}...\n`,
     );
     const response = await fetch(runtimeUrl, { redirect: "follow" });
     if (!response.ok) {
@@ -171,7 +181,10 @@ async function loadRuntimeZip({ runtimeZipPath, runtimeUrl, runtimeSha256 }) {
 
 async function extractRuntime(zip, outputDir) {
   const entries = Object.values(zip.files).filter(
-    (entry) => !entry.dir && entry.name.startsWith(RUNTIME_PREFIX),
+    (entry) =>
+      !entry.dir &&
+      entry.name.startsWith(RUNTIME_PREFIX) &&
+      !entry.name.startsWith(`${RUNTIME_PREFIX}.vscode/`),
   );
   if (!entries.some((entry) => entry.name === `${RUNTIME_PREFIX}index.html`)) {
     throw new Error("The runtime ZIP does not contain public/index.html.");
@@ -579,8 +592,8 @@ export async function packageWolfGame({
   sourceDir,
   outputDir,
   runtimeZipPath,
-  runtimeUrl = BROWSER_WODITOR_URL,
-  runtimeSha256 = BROWSER_WODITOR_SHA256,
+  runtimeUrl,
+  runtimeSha256,
   separate = true,
 }) {
   if (typeof separate !== "boolean")
