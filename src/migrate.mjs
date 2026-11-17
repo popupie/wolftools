@@ -14,6 +14,7 @@ import { requireDirectory, requireFile } from "./files.mjs";
 import {
   BROWSER_WODITOR_VERSION,
   WEB_EXPORT_VERSION,
+  indexWithCanvasFit,
   indexWithLazyAssetLoader,
   lazyAssetLoaderSource,
 } from "./web.mjs";
@@ -147,9 +148,22 @@ async function deferredAudioUpdates(outputDir, metadata) {
   return updates;
 }
 
+async function canvasFitUpdates(outputDir, _metadata, pending) {
+  const index =
+    pending.get("index.html") ??
+    (await readFile(join(outputDir, "index.html"), "utf8"));
+  const fittedIndex = indexWithCanvasFit(index);
+  return fittedIndex === index
+    ? new Map()
+    : new Map([["index.html", fittedIndex]]);
+}
+
 // Release versions stay fixed until a new migration is introduced. Additional
 // releases on the same date use .1, .2, etc..
-const migrations = [{ version: "2026.11.04", prepare: deferredAudioUpdates }];
+const migrations = [
+  { version: "2026.11.04", prepare: deferredAudioUpdates },
+  { version: "2026.11.17", prepare: canvasFitUpdates },
+];
 
 async function applyUpdates(outputDir, updates) {
   const originals = new Map();
@@ -250,7 +264,7 @@ export async function migrateWebExport({ exportDir }) {
       compareExportVersions(version, WEB_EXPORT_VERSION) > 0
     )
       continue;
-    for (const [path, content] of await prepare(outputDir, metadata))
+    for (const [path, content] of await prepare(outputDir, metadata, updates))
       updates.set(path, content);
     metadata.exportVersion = version;
   }

@@ -26,7 +26,7 @@ import { createDeferredAudioLoader } from "./browser/deferred-audio.mjs";
 import { installLazyAssets } from "./browser/lazy-assets.mjs";
 
 export const BROWSER_WODITOR_VERSION = "0.6.2.0";
-export const WEB_EXPORT_VERSION = "2026.11.04";
+export const WEB_EXPORT_VERSION = "2026.11.17";
 export const BROWSER_WODITOR_URL =
   "https://frostyhowl.com/files/BrowserWoditor_0_6_2_0.zip";
 export const BROWSER_WODITOR_SHA256 =
@@ -227,6 +227,39 @@ export function indexWithLazyAssetLoader(index) {
   return index
     .replace(previousLoader, "")
     .replace(woditorScript, `${loaderTag}\n  $&`);
+}
+
+export function indexWithCanvasFit(index) {
+  // Match Browser Woditor's original width calculation and keep the rest of
+  // its layout and input handling in place.
+  const sizing = new RegExp(
+    String.raw`^([ \t]*)const idealHeight = wholeHeight \* canvasRate;\s+` +
+      String.raw`const idealWidth = idealHeight \* aspectRatio \+ minButtonWidth;\s+` +
+      String.raw`const actualCanvasWidth = wholeWidth > idealWidth \? idealHeight \* aspectRatio : wholeWidth - minButtonWidth;`,
+    "mu",
+  );
+  const fittedIndex = index.replace(sizing, (_match, indent) =>
+    [
+      'const holder = document.getElementById("screen-holder-main");',
+      "const holderStyle = holder && window.getComputedStyle(holder);",
+      "const availableWidth = wholeWidth - minButtonWidth",
+      "  - (parseFloat(holderStyle?.marginLeft) || 0) - (parseFloat(holderStyle?.marginRight) || 0);",
+      "const availableHeight = holder && !isPortrait",
+      "  ? holder.getBoundingClientRect().height",
+      "  : wholeHeight - (parseFloat(holderStyle?.marginTop) || 0) - (parseFloat(holderStyle?.marginBottom) || 0);",
+      "const maxCanvasWidth = WoditorGameSettings.isFullscreen ? Infinity : canvas.width;",
+      "const actualCanvasWidth = Math.max(0, Math.min(",
+      "  availableWidth, availableHeight * canvasRate * aspectRatio, maxCanvasWidth",
+      "));",
+    ]
+      .map((line) => indent + line)
+      .join("\n"),
+  );
+  if (fittedIndex === index) return index;
+  return fittedIndex.replace(
+    /^([ \t]*)(function adjustGameUI\s*\(\)\s*\{)/mu,
+    '$1window.addEventListener("resize", () => window.requestAnimationFrame(adjustGameUI));\n$1$2',
+  );
 }
 
 async function addLazyAssetLoader(outputDir, options) {
@@ -587,6 +620,10 @@ export async function packageWolfGame({
     await mkdir(staging, { recursive: true });
     process.stdout.write("Preparing Browser Woditor runtime...\n");
     await extractRuntime(runtimeZip, staging);
+    const indexPath = join(staging, "index.html");
+    const index = await readFile(indexPath, "utf8");
+    const fittedIndex = indexWithCanvasFit(index);
+    if (fittedIndex !== index) await writeFile(indexPath, fittedIndex);
     let data;
     if (kind === "native") {
       const manifest = separate
