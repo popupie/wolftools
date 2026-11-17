@@ -3,6 +3,7 @@ export function installLazyAssets(
   sharedAssets,
   createDeferredAudioLoader,
   exportVersion = 0,
+  audioImports,
 ) {
   const loaderScript = document.currentScript;
   if (!loaderScript?.src)
@@ -81,6 +82,7 @@ export function installLazyAssets(
     console.log(`wolftools loaded asset: ${path} (${bytes} bytes)`);
   }
   const audio = createDeferredAudioLoader(Module, manifest.files, {
+    audioImports,
     pathKeys,
     assetUrl,
     exportRoot: exportRoot.href,

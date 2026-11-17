@@ -17,25 +17,48 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import JSZip from "jszip";
 
-import { packDx8NoKeyArchive } from "./archive/dx8.mjs";
 import { unpackWolf } from "./unpack.mjs";
 import { isArchivePath } from "./files.mjs";
 import { inspectFile } from "./inspect.mjs";
 import { browserAudioMetadata } from "./audio.mjs";
 import { createDeferredAudioLoader } from "./browser/deferred-audio.mjs";
+import {
+  findCheckedAssets,
+  writeBrowserBootArchive,
+} from "./browser/file-checks.mjs";
 import { installLazyAssets } from "./browser/lazy-assets.mjs";
 
-export const BROWSER_WODITOR_0_6_3_0 = {
-  runtimeVersion: "0.6.3.0",
-  runtimeUrl: "https://frostyhowl.com/files/BrowserWoditor_0_6_3_0.zip",
-  runtimeSha256: "32b8b899a0e1e003b24b613ab86effe45a66f2ef1173aa4824a12380e55930fa",
-};
-export const {
-  runtimeVersion: BROWSER_WODITOR_VERSION,
-  runtimeUrl: BROWSER_WODITOR_URL,
-  runtimeSha256: BROWSER_WODITOR_SHA256,
-} = BROWSER_WODITOR_0_6_3_0;
-export const WEB_EXPORT_VERSION = "2026.11.17.1";
+export const BROWSER_WODITOR_VERSION = "0.6.3.0";
+export const LEGACY_BROWSER_WODITOR_VERSION = "0.4.1.0";
+export const WEB_EXPORT_VERSION = "2026.11.17.4";
+
+const RUNTIME_CHECKSUMS = new Map([
+  [
+    "0.6.3.0",
+    "32b8b899a0e1e003b24b613ab86effe45a66f2ef1173aa4824a12380e55930fa",
+  ],
+  [
+    "0.6.2.0",
+    "50d525af26cfa597c402bfb527d1af66ca6b8db993e019079489e5e50cf91f20",
+  ],
+  [
+    LEGACY_BROWSER_WODITOR_VERSION,
+    "4bce38b4cb2fa395f9470cf73f39ef6f23be7384ecfced7761637498b01a3507",
+  ],
+]);
+
+export function resolveRuntimeVersion(requestedVersion) {
+  const version =
+    requestedVersion === undefined || requestedVersion === "default"
+      ? BROWSER_WODITOR_VERSION
+      : requestedVersion;
+  if (!RUNTIME_CHECKSUMS.has(version)) {
+    throw new Error(
+      `Unsupported Browser Woditor version ${JSON.stringify(version)}. Available versions: ${[...RUNTIME_CHECKSUMS.keys()].join(", ")}.`,
+    );
+  }
+  return version;
+}
 
 const RUNTIME_PREFIX = "public/";
 const SOURCE_FILES = [
@@ -130,10 +153,15 @@ function getRuntimeCachePath(version) {
 
 export async function loadRuntimeZip({
   runtimeZipPath,
-  runtimeVersion = BROWSER_WODITOR_VERSION,
-  runtimeUrl = BROWSER_WODITOR_URL,
-  runtimeSha256 = BROWSER_WODITOR_SHA256,
+  runtimeVersion: requestedVersion,
+  runtimeUrl,
+  runtimeSha256: requestedSha256,
 } = {}) {
+  const runtimeVersion = resolveRuntimeVersion(requestedVersion);
+  const runtimeSha256 =
+    requestedSha256 === undefined
+      ? RUNTIME_CHECKSUMS.get(runtimeVersion)
+      : requestedSha256;
   const expectedHash = runtimeSha256 && runtimeSha256.toLowerCase();
   let bytes;
   let cachePath;
@@ -151,10 +179,11 @@ export async function loadRuntimeZip({
       }
     }
 
-    process.stdout.write(
-      `Downloading Browser Woditor ${runtimeVersion}...\n`,
-    );
-    const response = await fetch(runtimeUrl, { redirect: "follow" });
+    process.stdout.write(`Downloading Browser Woditor ${runtimeVersion}...\n`);
+    const url =
+      runtimeUrl ??
+      `https://frostyhowl.com/files/BrowserWoditor_${runtimeVersion.replaceAll(".", "_")}.zip`;
+    const response = await fetch(url, { redirect: "follow" });
     if (!response.ok) {
       throw new Error(
         `Browser Woditor download failed (${response.status} ${response.statusText}).`,
@@ -179,7 +208,67 @@ export async function loadRuntimeZip({
   return JSZip.loadAsync(bytes);
 }
 
-async function extractRuntime(zip, outputDir) {
+// Match the current runtime's save namespace when running the legacy engine.
+function getGameProjectPath() {
+  const gameId =
+    document.baseURI.match(/GameFilesUpdate\/(\d+)\/(\d+)/)?.[1] ||
+    new URLSearchParams(window.location.search).get("Game_ID") ||
+    window.location.pathname.match(/Game_ID=([A-Za-z0-9]+)/)?.[1];
+  if (gameId) return `${gameId}_${WoditorGameSettings.projectId}`;
+
+  let dir;
+  try {
+    dir = top.location.pathname;
+  } catch {
+    dir = window.location.pathname;
+  }
+  const separator = dir.endsWith("/") ? "" : "/";
+  return `${dir}${separator}${WoditorGameSettings.projectId}`
+    .replace("index.html/", "")
+    .replace(/^\//, "")
+    .replaceAll(".", "_")
+    .replaceAll("/", "_");
+}
+
+async function runtimeFileContent(entry, path, runtimeVersion) {
+  if (runtimeVersion !== LEGACY_BROWSER_WODITOR_VERSION)
+    return entry.async("nodebuffer");
+
+  if (path === "lib/system.js") {
+    const source = await entry.async("string");
+    const projectPath = /^function getGameProjectPath\(\)\s*\{[\s\S]*?^\}/m;
+    if (!projectPath.test(source)) {
+      throw new Error(
+        "The legacy runtime does not define its save project path.",
+      );
+    }
+    return Buffer.from(
+      source.replace(projectPath, () => getGameProjectPath.toString()),
+    );
+  }
+  if (path === "index.html") {
+    const source = await entry.async("string");
+    // The legacy runtime puts its click-to-start text in the header.
+    return Buffer.from(
+      source.replace(
+        'document.getElementById("title-content").hidden = noHeaderFooter;',
+        'document.getElementById("title-content").hidden = noHeaderFooter && !!window.Module?.woditor?.initialized;',
+      ),
+    );
+  }
+  return entry.async("nodebuffer");
+}
+
+export function runtimeFile(zip, path, runtimeVersion) {
+  const entry = zip.file(`${RUNTIME_PREFIX}${path}`);
+  if (!entry)
+    throw new Error(
+      `The runtime ZIP does not contain ${RUNTIME_PREFIX}${path}.`,
+    );
+  return runtimeFileContent(entry, path, runtimeVersion);
+}
+
+async function extractRuntime(zip, outputDir, runtimeVersion) {
   const entries = Object.values(zip.files).filter(
     (entry) =>
       !entry.dir &&
@@ -208,7 +297,10 @@ async function extractRuntime(zip, outputDir) {
     }
     const outputPath = join(outputDir, path);
     await mkdir(dirname(outputPath), { recursive: true });
-    await writeFile(outputPath, await entry.async("nodebuffer"));
+    await writeFile(
+      outputPath,
+      await runtimeFileContent(entry, path, runtimeVersion),
+    );
   }
 }
 
@@ -224,8 +316,23 @@ async function browserWoditorMarker(zip) {
   return marker.async("nodebuffer");
 }
 
-export function lazyAssetLoaderSource({ sharedAssets = false } = {}) {
-  return `(${installLazyAssets.toString()})(${JSON.stringify(sharedAssets)}, ${createDeferredAudioLoader.toString()}, ${JSON.stringify(WEB_EXPORT_VERSION)});\n`;
+export function lazyAssetLoaderSource({
+  sharedAssets = false,
+  runtimeVersion,
+} = {}) {
+  const args = [
+    JSON.stringify(sharedAssets),
+    createDeferredAudioLoader.toString(),
+    JSON.stringify(WEB_EXPORT_VERSION),
+  ];
+  if (runtimeVersion === LEGACY_BROWSER_WODITOR_VERSION) {
+    // The pinned 0.4.1.0 build imports _alBufferData and _alDeleteBuffers
+    // as a.F and a.Z in its generated Emscripten glue.
+    args.push(
+      JSON.stringify({ namespace: "a", bufferData: "F", deleteBuffers: "Z" }),
+    );
+  }
+  return `(${installLazyAssets.toString()})(${args.join(", ")});\n`;
 }
 
 export function indexWithLazyAssetLoader(index) {
@@ -257,7 +364,9 @@ export function indexWithCanvasFit(index) {
       "const holderStyle = holder && window.getComputedStyle(holder);",
       "const availableWidth = wholeWidth - minButtonWidth",
       "  - (parseFloat(holderStyle?.marginLeft) || 0) - (parseFloat(holderStyle?.marginRight) || 0);",
-      "const availableHeight = holder && !isPortrait",
+      "const portraitLayout = typeof isPortrait === 'boolean'",
+      "  ? isPortrait : wholeWidth / wholeHeight < 3.5 / 4;",
+      "const availableHeight = holder && !portraitLayout",
       "  ? holder.getBoundingClientRect().height",
       "  : wholeHeight - (parseFloat(holderStyle?.marginTop) || 0) - (parseFloat(holderStyle?.marginBottom) || 0);",
       "const maxCanvasWidth = WoditorGameSettings.isFullscreen ? Infinity : canvas.width;",
@@ -425,10 +534,9 @@ async function containsArchives(root, files) {
   return (await findArchives(root, files)).length > 0;
 }
 
-async function createLooseBrowserData(sourceDir, outputDir, runtimeZip) {
+async function createLooseBrowserData(sourceDir, outputDir, runtimeVersion) {
   const workRoot = await mkdtemp(join(tmpdir(), "wolftools web "));
   const unpackedGame = join(workRoot, "game");
-  const bootData = join(workRoot, "boot");
   try {
     const sourceFiles = await listFiles(sourceDir);
     const hasArchives = await containsArchives(sourceDir, sourceFiles);
@@ -450,18 +558,8 @@ async function createLooseBrowserData(sourceDir, outputDir, runtimeZip) {
       `${JSON.stringify(manifest)}\n`,
     );
 
-    const markerDir = join(bootData, "BasicData");
-    await mkdir(markerDir, { recursive: true });
-    await writeFile(
-      join(markerDir, "BrowserWoditor.dat"),
-      await browserWoditorMarker(runtimeZip),
-    );
-
-    process.stdout.write("Creating the small browser startup archive...\n");
-    await rm(join(outputDir, "Data.wolf"), { force: true });
-    await packDx8NoKeyArchive(bootData, join(outputDir, "Data.wolf"));
     await copyGameSupportFiles(sourceDir, outputDir);
-    await addLazyAssetLoader(outputDir);
+    await addLazyAssetLoader(outputDir, { runtimeVersion });
     return manifest;
   } finally {
     await rm(workRoot, { recursive: true, force: true });
@@ -536,7 +634,7 @@ export async function inspectCombinedGame(sourcePath, { outputDir } = {}) {
   };
 }
 
-async function createSharedBrowserData(sourceDir, outputDir, runtimeZip) {
+async function createSharedBrowserData(sourceDir, outputDir, runtimeVersion) {
   const manifest = await createAssetManifest(join(sourceDir, "Data"));
   manifest.preload = [];
   // Keep tiny browser configuration separate. Fonts and other support assets
@@ -572,19 +670,7 @@ async function createSharedBrowserData(sourceDir, outputDir, runtimeZip) {
     join(outputDir, "asset_manifest.json"),
     `${JSON.stringify(manifest)}\n`,
   );
-  const bootRoot = await mkdtemp(join(tmpdir(), "wolftools web boot "));
-  try {
-    await mkdir(join(bootRoot, "BasicData"));
-    await writeFile(
-      join(bootRoot, "BasicData", "BrowserWoditor.dat"),
-      await browserWoditorMarker(runtimeZip),
-    );
-    await rm(join(outputDir, "Data.wolf"), { force: true });
-    await packDx8NoKeyArchive(bootRoot, join(outputDir, "Data.wolf"));
-  } finally {
-    await rm(bootRoot, { recursive: true, force: true });
-  }
-  await addLazyAssetLoader(outputDir, { sharedAssets: true });
+  await addLazyAssetLoader(outputDir, { sharedAssets: true, runtimeVersion });
   return manifest;
 }
 
@@ -592,12 +678,14 @@ export async function packageWolfGame({
   sourceDir,
   outputDir,
   runtimeZipPath,
+  runtimeVersion: requestedVersion,
   runtimeUrl,
   runtimeSha256,
   separate = true,
 }) {
   if (typeof separate !== "boolean")
     throw new Error("separate must be true or false.");
+  const runtimeVersion = resolveRuntimeVersion(requestedVersion);
   const source = await normalizeSourceDir(sourceDir);
   // Check before reading/downloading a runtime or starting any extraction.
   await requireNoWebEntry(source);
@@ -626,13 +714,14 @@ export async function packageWolfGame({
   );
   const runtimeZip = await loadRuntimeZip({
     runtimeZipPath,
+    runtimeVersion,
     runtimeUrl,
     runtimeSha256,
   });
   try {
     await mkdir(staging, { recursive: true });
     process.stdout.write("Preparing Browser Woditor runtime...\n");
-    await extractRuntime(runtimeZip, staging);
+    await extractRuntime(runtimeZip, staging, runtimeVersion);
     const indexPath = join(staging, "index.html");
     const index = await readFile(indexPath, "utf8");
     const fittedIndex = indexWithCanvasFit(index);
@@ -640,8 +729,19 @@ export async function packageWolfGame({
     let data;
     if (kind === "native") {
       const manifest = separate
-        ? await createLooseBrowserData(source, staging, runtimeZip)
-        : await createSharedBrowserData(source, staging, runtimeZip);
+        ? await createLooseBrowserData(source, staging, runtimeVersion)
+        : await createSharedBrowserData(source, staging, runtimeVersion);
+      const assets = await findCheckedAssets(
+        join(separate ? staging : source, "Data"),
+        manifest.files,
+      );
+      process.stdout.write("Creating the browser startup archive...\n");
+      const bootArchive = join(staging, "Data.wolf");
+      await rm(bootArchive, { force: true });
+      await writeBrowserBootArchive(bootArchive, {
+        assets,
+        marker: await browserWoditorMarker(runtimeZip),
+      });
       data = {
         delivery: "files",
         manifest: "asset_manifest.json",
@@ -672,7 +772,10 @@ export async function packageWolfGame({
           exportVersion: WEB_EXPORT_VERSION,
           title: gameTitle,
           engine: "wolf-rpg",
-          runtime: `Browser Woditor ${BROWSER_WODITOR_VERSION}`,
+          runtime: `Browser Woditor ${runtimeVersion}`,
+          ...(requestedVersion && requestedVersion !== "default"
+            ? { runtimePin: runtimeVersion }
+            : {}),
           layout: separate ? "separate" : "combined",
           data,
         },

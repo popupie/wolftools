@@ -10,6 +10,7 @@ import {
   BROWSER_WODITOR_VERSION,
   inspectCombinedGame,
   packageWolfGame,
+  resolveRuntimeVersion,
 } from "./web.mjs";
 import { serveWebExport } from "./serve.mjs";
 import { migrateWebExport } from "./migrate.mjs";
@@ -28,6 +29,7 @@ const COMMAND_OPTIONS = new Map([
       out: OUTPUT_OPTION,
       separate: { type: "string", short: "s" },
       runtime: { type: "string", short: "r" },
+      "runtime-version": { type: "string" },
       migrate: { type: "boolean" },
     },
   ],
@@ -43,8 +45,8 @@ export function helpText() {
 
 Usage
   wolftools inspect <input>
-  wolftools web <input> [--out <folder>] [--runtime <zip>] [--separate <true|false>]
-  wolftools web <input> --migrate
+  wolftools web <input> [--out <folder>] [--separate <true|false>] [--runtime-version <version>] [--runtime <zip>]
+  wolftools web <input> --migrate [--runtime-version <version|default>] [--runtime <zip>]
   wolftools serve <input> [--port <number>]
   wolftools unpack <input> [--out <folder>]
   wolftools pack <input> [--out <path>] [--mode <mode>]
@@ -58,7 +60,9 @@ Options
   -o, --out <path>             Set the output path for web, unpack, or pack.
   -s, --separate <true|false>  Create a separate web export (default: true).
                                Use false to add web/ to the game and share Data/.
-  -r, --runtime <zip>          Use a local Browser Woditor ZIP for web.
+  -r, --runtime <zip>           Use a local ZIP for the selected Browser Woditor version.
+      --runtime-version         Pin Browser Woditor for this export (tool default: ${BROWSER_WODITOR_VERSION}).
+                                Use default to clear the export's pin.
   -m, --mode <mode>            Choose a WOLF RPG Editor pack mode.
   -p, --port <number>          Choose the server port (default: 4177).
       --migrate                Update an existing web export in place.`;
@@ -152,17 +156,32 @@ export async function runCli(
     return formatInspection(await inspectPath(input));
   }
   if (command === "web") {
-    const { out, runtime, separate: layout, migrate } = options;
+    const {
+      out,
+      runtime,
+      separate: layout,
+      migrate,
+      "runtime-version": runtimeVersion,
+    } = options;
+    resolveRuntimeVersion(runtimeVersion);
     if (migrate) {
-      if (out !== undefined || runtime !== undefined || layout !== undefined) {
+      if (out !== undefined || layout !== undefined) {
         throw new Error(
-          "--migrate updates the export in place. Omit --out, --runtime, and --separate.",
+          "--migrate updates the export in place. Omit --out and --separate.",
         );
       }
-      const result = await migrateWebExport({ exportDir: input });
-      return result.migrated
-        ? `Migrated web export from version ${result.previousVersion} to ${result.version}.\nOutput: ${result.outputDir}\n`
-        : `Web export is already at version ${result.version}. No files were changed.\nOutput: ${result.outputDir}`;
+      const result = await migrateWebExport({
+        exportDir: input,
+        runtimeVersion,
+        runtimeZipPath: runtime,
+      });
+      const version = `${result.version} (Browser Woditor ${result.runtimeVersion})`;
+      const output = `Output: ${result.outputDir}`;
+      if (!result.migrated)
+        return `Web export is already at version ${version}. No files were changed.\n${output}`;
+      if (result.previousVersion === result.version)
+        return `Updated web export runtime settings (Browser Woditor ${result.runtimeVersion}).\n${output}\n`;
+      return `Migrated web export from version ${result.previousVersion} to ${version}.\n${output}\n`;
     }
     if (layout !== undefined && layout !== "true" && layout !== "false") {
       throw new Error("--separate must be true or false.");
@@ -186,6 +205,7 @@ export async function runCli(
       sourceDir: input,
       outputDir: out,
       runtimeZipPath: runtime,
+      runtimeVersion,
       separate,
     });
     return `Created web export for ${result.title}.\nOutput: ${result.outputDir}`;

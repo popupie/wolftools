@@ -70,6 +70,10 @@ It accepts a game with a `Data/` folder or a `Data.wolf` archive.
 
 If `Game.ini` is missing, the tool creates a default one for the website.
 
+For exports with unpacked assets, wolftools puts existing files named by literal
+`GET_FILE_EXIST` checks into the browser's startup `Data.wolf`. Paths assembled at runtime or stored in
+encrypted event data may need to be packed manually.
+
 ### Share one game folder
 
 Use `--separate false` or `-s false` to keep the Windows EXE and website in the
@@ -112,19 +116,33 @@ Existing browser saves remain accessible in the same browser profile at the same
 
 See update detail [here](#web-export-version)
 
-### Use a local Browser Woditor ZIP
+### Choose a Browser Woditor version
 
-By default, wolftools uses the pinned Browser Woditor ZIP. To use a local copy
-of that ZIP, pass `--runtime` (`-r`).
+The default version is 0.6.3.0. Supported pins are 0.6.3.0, 0.6.2.0, and
+0.4.1.0. Use `--runtime-version` when a game needs a specific version:
 
 ```sh
-wolftools web "/path/to/Game" --out "./output/Web Game" --runtime "/path/to/BrowserWoditor.zip"
+wolftools web "/path/to/Game" --separate false --runtime-version 0.4.1.0
+wolftools web "/path/to/Existing Game" --migrate --runtime-version 0.4.1.0
 ```
 
-For combined mode:
+Future migrations keep an export's pin. To clear it and install the tool's
+default version, use `--migrate --runtime-version default`.
+
+Switching to or from 0.4.1.0 replaces the runtime's HTML template and applies
+the wolftools layout and asset loader to the new template. Keep a copy of any
+custom changes to `index.html`. The export keeps its browser save identity.
+An older engine may be unable to read a save created by a newer engine.
+
+New wolftools exports using 0.4.1.0 fetch and decode eligible loose audio
+asynchronously. Run `--migrate` to update the loader on an older export pinned
+to 0.4.1.0.
+
+Pass `--runtime` (`-r`) to use a local copy of the selected version's ZIP.
+wolftools verifies its checksum.
 
 ```sh
-wolftools web "/path/to/Game" -s false -r "/path/to/BrowserWoditor.zip"
+wolftools web "/path/to/Existing Game" --migrate --runtime-version 0.4.1.0 --runtime "/path/to/BrowserWoditor_0_4_1_0.zip"
 ```
 
 ### Test the website
@@ -232,6 +250,9 @@ Its runtime files are not included in this repository.
 
 ## Web export version
 
+- `2026.11.17.4`: Packs assets found by literal `GET_FILE_EXIST` checks into the browser startup archive.
+- `2026.11.17.3`: Enables asynchronous audio loading on Browser Woditor 0.4.1.0.
+- `2026.11.17.2`: Supports selecting and retaining a Browser Woditor version.
 - `2026.11.17.1`: Updates Browser Woditor to 0.6.3.0.
 - `2026.11.17`: Keeps the canvas at native size or smaller in a normal window.
 - `2026.11.04`: Fix Chromium MP3 loading failures with asynchronous.

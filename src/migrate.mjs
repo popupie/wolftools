@@ -1,23 +1,32 @@
 import {
+  chmod,
+  copyFile,
   lstat,
   mkdir,
   mkdtemp,
   readFile,
   rename,
   rm,
+  rmdir,
   writeFile,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { BROWSER_AUDIO_EXTENSIONS, browserAudioMetadata } from "./audio.mjs";
+import {
+  findCheckedAssets,
+  writeBrowserBootArchive,
+} from "./browser/file-checks.mjs";
 import { requireDirectory, requireFile } from "./files.mjs";
 import {
-  BROWSER_WODITOR_0_6_3_0,
+  LEGACY_BROWSER_WODITOR_VERSION,
   WEB_EXPORT_VERSION,
   indexWithCanvasFit,
   indexWithLazyAssetLoader,
   lazyAssetLoaderSource,
   loadRuntimeZip,
+  resolveRuntimeVersion,
+  runtimeFile,
 } from "./web.mjs";
 
 async function details(path) {
@@ -81,6 +90,14 @@ function assetPath(root, path) {
   return join(root, path);
 }
 
+function usesSharedAssets(metadata) {
+  return (
+    metadata.layout === "combined" ||
+    metadata.data.shared === true ||
+    metadata.data.assetBase === "../"
+  );
+}
+
 async function deferredAudioUpdates(outputDir, metadata) {
   await requireFile(join(outputDir, "settings.js"));
   await requireFile(join(outputDir, "index.html"));
@@ -97,10 +114,7 @@ async function deferredAudioUpdates(outputDir, metadata) {
   ) {
     throw new Error("Unsupported web export manifest or Data folder location.");
   }
-  const shared =
-    metadata.layout === "combined" ||
-    metadata.data.shared === true ||
-    metadata.data.assetBase === "../";
+  const shared = usesSharedAssets(metadata);
   if (
     metadata.data.assetBase !== undefined &&
     metadata.data.assetBase !== "../"
@@ -154,18 +168,59 @@ async function canvasFitUpdates(outputDir, _metadata, pending) {
     : new Map([["index.html", fittedIndex]]);
 }
 
-async function browserWoditor063Updates(_outputDir, metadata) {
-  const zip = await loadRuntimeZip(BROWSER_WODITOR_0_6_3_0);
+async function bootArchiveUpdates(outputDir, metadata, _pending, workDir) {
   const updates = new Map();
-  // These are the runtime files that changed since 0.6.2.0.
-  for (const path of ["lib/system.js", "woditor.js", "woditor.wasm"]) {
-    const entry = zip.file(`public/${path}`);
-    if (!entry)
-      throw new Error(`The runtime ZIP does not contain public/${path}.`);
-    updates.set(path, await entry.async("nodebuffer"));
+  if (metadata.data?.delivery !== "files") return updates;
+
+  const root = usesSharedAssets(metadata) ? dirname(outputDir) : outputDir;
+  const manifest = await readJson(join(outputDir, "asset_manifest.json"));
+  if (!Array.isArray(manifest?.files))
+    throw new Error("The asset manifest has no files array.");
+  const assets = await findCheckedAssets(join(root, "Data"), manifest.files);
+  if (!assets.length) return updates;
+
+  const previousArchive = join(outputDir, "Data.wolf");
+  const existing = await details(previousArchive);
+  if (!existing?.isFile())
+    throw new Error("The browser startup archive must be a regular file.");
+  const archivePath = join(workDir, "Data.wolf");
+  if (await writeBrowserBootArchive(archivePath, { assets, previousArchive })) {
+    updates.set("Data.wolf", { sourcePath: archivePath });
   }
-  metadata.runtime = `Browser Woditor ${BROWSER_WODITOR_0_6_3_0.runtimeVersion}`;
   return updates;
+}
+
+function updateAssetLoader(updates, index, metadata, runtimeVersion) {
+  updates.set("index.html", indexWithLazyAssetLoader(index));
+  updates.set(
+    "lib/lazy_assets.js",
+    lazyAssetLoaderSource({
+      sharedAssets: usesSharedAssets(metadata),
+      runtimeVersion,
+    }),
+  );
+}
+
+async function updateRuntime(updates, zip, metadata, runtimeVersion) {
+  const legacy = runtimeVersion === LEGACY_BROWSER_WODITOR_VERSION;
+  const wasLegacy =
+    metadata.runtime === `Browser Woditor ${LEGACY_BROWSER_WODITOR_VERSION}`;
+  const paths = ["lib/system.js", "woditor.js", "woditor.wasm"];
+  if (legacy || wasLegacy) {
+    paths.push("lib/keydispatch.js");
+    if (!legacy) paths.push("img/bwoditor.svg", "lib/jszip.min.js");
+
+    const template = await runtimeFile(zip, "index.html", runtimeVersion);
+    const index = indexWithCanvasFit(template.toString("utf8"));
+    if (metadata.data?.delivery === "files") {
+      updateAssetLoader(updates, index, metadata, runtimeVersion);
+    } else {
+      updates.set("index.html", index);
+    }
+  }
+  for (const path of paths) {
+    updates.set(path, await runtimeFile(zip, path, runtimeVersion));
+  }
 }
 
 // Release versions stay fixed until a new migration is introduced. Additional
@@ -173,7 +228,7 @@ async function browserWoditor063Updates(_outputDir, metadata) {
 const migrations = [
   { version: "2026.11.04", prepare: deferredAudioUpdates },
   { version: "2026.11.17", prepare: canvasFitUpdates },
-  { version: "2026.11.17.1", prepare: browserWoditor063Updates },
+  { version: "2026.11.17.4", prepare: bootArchiveUpdates },
 ];
 
 async function applyUpdates(outputDir, updates) {
@@ -193,10 +248,7 @@ async function applyUpdates(outputDir, updates) {
     if (info && (!info.isFile() || info.isSymbolicLink())) {
       throw new Error(`Migration target must be a regular file: ${target}`);
     }
-    originals.set(
-      path,
-      info ? { bytes: await readFile(target), mode: info.mode } : undefined,
-    );
+    originals.set(path, info);
   }
   const staging = await mkdtemp(
     join(dirname(outputDir), ".wolftools-migration-"),
@@ -207,12 +259,17 @@ async function applyUpdates(outputDir, updates) {
     for (const [path, content] of updates) {
       const next = join(staging, "next", path);
       await mkdir(dirname(next), { recursive: true });
-      await writeFile(next, content, { mode: originals.get(path)?.mode });
       const original = originals.get(path);
+      if (content.sourcePath) {
+        await copyFile(content.sourcePath, next);
+        if (original) await chmod(next, original.mode);
+      } else {
+        await writeFile(next, content, { mode: original?.mode });
+      }
       if (original) {
         const backup = join(staging, "before", path);
         await mkdir(dirname(backup), { recursive: true });
-        await writeFile(backup, original.bytes, { mode: original.mode });
+        await copyFile(join(outputDir, path), backup);
       }
     }
     for (const path of updates.keys()) {
@@ -244,7 +301,11 @@ async function applyUpdates(outputDir, updates) {
   }
 }
 
-export async function migrateWebExport({ exportDir }) {
+export async function migrateWebExport({
+  exportDir,
+  runtimeVersion,
+  runtimeZipPath,
+}) {
   const root = await requireDirectory(
     exportDir,
     "Existing web export or combined game folder",
@@ -256,6 +317,35 @@ export async function migrateWebExport({ exportDir }) {
     join(outputDir, "browser-game.json"),
     "Web export browser-game.json",
   );
+  const lock = join(outputDir, ".wolftools-migration-lock");
+  try {
+    await mkdir(lock);
+  } catch (error) {
+    if (error.code === "EEXIST")
+      throw new Error(
+        `A migration is already running or left a lock at ${lock}.`,
+      );
+    throw error;
+  }
+  try {
+    return await migrateExportFiles(
+      outputDir,
+      runtimeVersion,
+      runtimeZipPath,
+      lock,
+    );
+  } finally {
+    await rm(join(lock, "Data.wolf"), { force: true });
+    await rmdir(lock);
+  }
+}
+
+async function migrateExportFiles(
+  outputDir,
+  requestedVersion,
+  runtimeZipPath,
+  workDir,
+) {
   const metadata = await readJson(join(outputDir, "browser-game.json"));
   if (metadata?.engine !== "wolf-rpg")
     throw new Error("This is not a wolftools WOLF web export.");
@@ -268,6 +358,17 @@ export async function migrateWebExport({ exportDir }) {
       `Export version ${previousVersion} is newer than this tool supports (${WEB_EXPORT_VERSION}).`,
     );
   }
+  const runtimePin =
+    requestedVersion === "default"
+      ? undefined
+      : (requestedVersion ?? metadata.runtimePin);
+  const runtimeVersion = resolveRuntimeVersion(runtimePin);
+  const runtime = `Browser Woditor ${runtimeVersion}`;
+  const legacy = runtimeVersion === LEGACY_BROWSER_WODITOR_VERSION;
+  const runtimeChanged =
+    metadata.runtime !== runtime ||
+    (legacy && compareExportVersions(previousVersion, "2026.11.17.2") < 0);
+
   const updates = new Map();
   for (const { version, prepare } of migrations) {
     if (
@@ -275,15 +376,37 @@ export async function migrateWebExport({ exportDir }) {
       compareExportVersions(version, WEB_EXPORT_VERSION) > 0
     )
       continue;
-    for (const [path, content] of await prepare(outputDir, metadata, updates))
+    for (const [path, content] of await prepare(
+      outputDir,
+      metadata,
+      updates,
+      workDir,
+    ))
       updates.set(path, content);
-    metadata.exportVersion = version;
   }
-  if (comparison < 0) {
-    if (metadata.exportVersion !== WEB_EXPORT_VERSION)
-      throw new Error(
-        "No migration is available to the current export version.",
-      );
+
+  if (runtimeChanged || runtimeZipPath) {
+    const zip = await loadRuntimeZip({ runtimeVersion, runtimeZipPath });
+    if (runtimeChanged)
+      await updateRuntime(updates, zip, metadata, runtimeVersion);
+  }
+  if (
+    !runtimeChanged &&
+    legacy &&
+    metadata.data?.delivery === "files" &&
+    compareExportVersions(previousVersion, "2026.11.17.3") < 0
+  ) {
+    const index = await readFile(join(outputDir, "index.html"), "utf8");
+    updateAssetLoader(updates, index, metadata, runtimeVersion);
+  }
+
+  const migrated =
+    comparison < 0 || runtimeChanged || runtimePin !== metadata.runtimePin;
+  if (migrated) {
+    metadata.exportVersion = WEB_EXPORT_VERSION;
+    metadata.runtime = runtime;
+    if (runtimePin === undefined) delete metadata.runtimePin;
+    else metadata.runtimePin = runtimePin;
     // Publish the version last, after its corresponding files are in place.
     updates.set("browser-game.json", `${JSON.stringify(metadata, null, 2)}\n`);
     await applyUpdates(outputDir, updates);
@@ -292,7 +415,8 @@ export async function migrateWebExport({ exportDir }) {
     outputDir: resolve(outputDir),
     previousVersion,
     version: WEB_EXPORT_VERSION,
-    migrated: comparison < 0,
+    runtimeVersion,
+    migrated,
     files: [...updates.keys()],
   };
 }

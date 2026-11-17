@@ -284,14 +284,22 @@ export function createDeferredAudioLoader(Module, files, options) {
   }
 
   function wrapImports(imports) {
-    const env = imports.env;
-    if (!env?.alBufferData || !env.alDeleteBuffers) {
+    const {
+      namespace = "env",
+      bufferData = "alBufferData",
+      deleteBuffers = "alDeleteBuffers",
+    } = options.audioImports ?? {};
+    const env = imports[namespace];
+    if (
+      typeof env?.[bufferData] !== "function" ||
+      typeof env[deleteBuffers] !== "function"
+    ) {
       throw new Error(
         "This Browser Woditor runtime does not expose the required audio hooks.",
       );
     }
-    const originalData = env.alBufferData;
-    env.alBufferData = function (id, format, pointer, size, frequency) {
+    const originalData = env[bufferData];
+    env[bufferData] = function (id, format, pointer, size, frequency) {
       const info = identify(pointer, size, frequency, format);
       const result = originalData.apply(this, arguments);
       const buffer = AL.buffers[id];
@@ -311,8 +319,8 @@ export function createDeferredAudioLoader(Module, files, options) {
       }
       return result;
     };
-    const originalDelete = env.alDeleteBuffers;
-    env.alDeleteBuffers = function (count, pointer) {
+    const originalDelete = env[deleteBuffers];
+    env[deleteBuffers] = function (count, pointer) {
       const ids = new Int32Array(Module.HEAP8.buffer, pointer, count);
       const removed = Array.from(ids, (id) => AL.buffers[id]);
       const result = originalDelete.apply(this, arguments);

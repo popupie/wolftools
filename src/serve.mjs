@@ -136,6 +136,8 @@ export async function serveWebExport({
       const length = file.size === 0 ? 0 : end - start + 1;
       const headers = {
         "Cache-Control": "no-cache",
+        // Browser Woditor compares the HEAD response with its stored asset revision.
+        ETag: `W/"${file.size}-${file.mtimeMs}"`,
         "Content-Length": length,
         "Content-Type":
           MIME_TYPES.get(extname(path).toLowerCase()) ||
