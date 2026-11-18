@@ -17,6 +17,7 @@ import {
   findCheckedAssets,
   writeBrowserBootArchive,
 } from "./browser/file-checks.mjs";
+import { browserFontUpdates, FONT_FILE } from "./browser/fonts.mjs";
 import { requireDirectory, requireFile } from "./files.mjs";
 import {
   LEGACY_BROWSER_WODITOR_VERSION,
@@ -241,6 +242,29 @@ function updateAssetLoader(updates, index, metadata, runtimeVersion) {
   );
 }
 
+async function fontRegistrationUpdates(outputDir, metadata, pending) {
+  if (metadata.data?.delivery !== "files")
+    return browserFontUpdates(outputDir, outputDir, []);
+
+  const gameRoot = usesSharedAssets(metadata) ? dirname(outputDir) : outputDir;
+  const manifestPath = "asset_manifest.json";
+  const manifest = pending.has(manifestPath)
+    ? JSON.parse(pending.get(manifestPath))
+    : await readJson(join(outputDir, manifestPath));
+  if (!Array.isArray(manifest?.files))
+    throw new Error("The asset manifest has no files array.");
+  const looseFonts = manifest.files
+    .map((entry) => entry?.path)
+    .filter(
+      (path) =>
+        typeof path === "string" &&
+        path.startsWith("Data/") &&
+        FONT_FILE.test(path),
+    )
+    .map((path) => assetPath(gameRoot, path));
+  return browserFontUpdates(outputDir, gameRoot, looseFonts);
+}
+
 async function updateRuntime(updates, zip, metadata, runtimeVersion) {
   const legacy = runtimeVersion === LEGACY_BROWSER_WODITOR_VERSION;
   const wasLegacy =
@@ -271,6 +295,7 @@ const migrations = [
   { version: "2026.11.17.4", prepare: bootArchiveUpdates },
   { version: "2026.11.18", prepare: binaryAssetUpdates },
   { version: "2026.11.18.1", prepare: lazyDirectoryUpdates },
+  { version: "2026.11.18.2", prepare: fontRegistrationUpdates },
 ];
 
 async function applyUpdates(outputDir, updates) {

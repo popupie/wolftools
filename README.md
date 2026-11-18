@@ -250,6 +250,7 @@ Its runtime files are not included in this repository.
 
 ## Web export version
 
+- `2026.11.18.2`: Registers supplied TrueType and OpenType fonts by name in Browser Woditor's `FontList.ini`.
 - `2026.11.18.1`: Makes asset directories visible to Browser Woditor before their files are loaded.
 - `2026.11.18`: Preserves the original bytes of assets with a Unicode byte-order mark in browser exports.
 - `2026.11.17.4`: Packs assets found by literal `GET_FILE_EXIST` checks into the browser startup archive.

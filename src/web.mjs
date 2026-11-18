@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   access,
+  copyFile,
   cp,
   lstat,
   mkdir,
@@ -27,11 +28,12 @@ import {
   findCheckedAssets,
   writeBrowserBootArchive,
 } from "./browser/file-checks.mjs";
+import { browserFontUpdates, FONT_FILE } from "./browser/fonts.mjs";
 import { installLazyAssets } from "./browser/lazy-assets.mjs";
 
 export const BROWSER_WODITOR_VERSION = "0.6.3.0";
 export const LEGACY_BROWSER_WODITOR_VERSION = "0.4.1.0";
-export const WEB_EXPORT_VERSION = "2026.11.18.1";
+export const WEB_EXPORT_VERSION = "2026.11.18.2";
 
 const RUNTIME_CHECKSUMS = new Map([
   [
@@ -749,12 +751,18 @@ export async function packageWolfGame({
     const fittedIndex = indexWithCanvasFit(index);
     if (fittedIndex !== index) await writeFile(indexPath, fittedIndex);
     let data;
+    let looseFonts = [];
     if (kind === "native") {
       const manifest = separate
         ? await createLooseBrowserData(source, staging, runtimeVersion)
         : await createSharedBrowserData(source, staging, runtimeVersion);
+      const assetRoot = separate ? staging : source;
+      looseFonts = manifest.files
+        .map((entry) => entry.path)
+        .filter((path) => path.startsWith("Data/") && FONT_FILE.test(path))
+        .map((path) => join(assetRoot, path));
       const assets = await findCheckedAssets(
-        join(separate ? staging : source, "Data"),
+        join(assetRoot, "Data"),
         manifest.files,
       );
       process.stdout.write("Creating the browser startup archive...\n");
@@ -777,6 +785,20 @@ export async function packageWolfGame({
       process.stdout.write("Copying creator export...\n");
       await copyPreparedRelease(source, staging);
       data = { delivery: "archive", file: "Data.wolf" };
+    }
+
+    for (const [path, content] of await browserFontUpdates(
+      staging,
+      source,
+      looseFonts,
+    )) {
+      const target = join(staging, path);
+      if (content.sourcePath) {
+        await mkdir(dirname(target), { recursive: true });
+        await copyFile(content.sourcePath, target);
+      } else {
+        await writeFile(target, content);
+      }
     }
 
     if (!(await exists(join(staging, "Game.ini")))) {
