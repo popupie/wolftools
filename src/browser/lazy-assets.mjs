@@ -75,6 +75,27 @@ export function installLazyAssets(
   const reportedMissing = new Set();
   const assetUrl = (path) =>
     new URL(path.split("/").map(encodeURIComponent).join("/"), gameRoot).href;
+  const binaryAssets = new Map(
+    manifest.files
+      .filter((file) => file.hasUnicodeBom)
+      .map((file) => [normalize(file.path), undefined]),
+  );
+
+  async function preloadBinaryAsset(path) {
+    try {
+      const response = await fetch(assetUrl(path));
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      binaryAssets.set(path, new Uint8Array(await response.arrayBuffer()));
+    } catch (cause) {
+      binaryAssets.set(
+        path,
+        new Error(`Could not load WOLF asset ${path}: ${cause.message}`, {
+          cause,
+        }),
+      );
+    }
+  }
+
   function loaded(path, bytes) {
     stats.requests++;
     stats.bytes += bytes;
@@ -123,19 +144,25 @@ export function installLazyAssets(
     }
     const absolute = `/${requested}`;
     if (FS.analyzePath(absolute).exists) return;
-    const request = new XMLHttpRequest();
-    request.open("GET", assetUrl(relative), false);
-    request.overrideMimeType("text/plain; charset=x-user-defined");
-    request.send(null);
-    if (request.status < 200 || request.status >= 300) {
-      throw new Error(
-        `Could not load WOLF asset ${relative}. HTTP ${request.status}`,
+    let bytes = binaryAssets.get(relative);
+    if (binaryAssets.has(relative)) {
+      if (bytes instanceof Error) throw bytes;
+      if (!bytes) throw new Error(`Still loading WOLF asset ${relative}.`);
+    } else {
+      const request = new XMLHttpRequest();
+      request.open("GET", assetUrl(relative), false);
+      request.overrideMimeType("text/plain; charset=x-user-defined");
+      request.send(null);
+      if (request.status < 200 || request.status >= 300) {
+        throw new Error(
+          `Could not load WOLF asset ${relative}. HTTP ${request.status}`,
+        );
+      }
+      bytes = Uint8Array.from(
+        request.responseText,
+        (character) => character.charCodeAt(0) & 255,
       );
     }
-    const bytes = Uint8Array.from(
-      request.responseText,
-      (character) => character.charCodeAt(0) & 255,
-    );
     FS.mkdirTree(absolute.slice(0, absolute.lastIndexOf("/")) || "/");
     FS.writeFile(absolute, bytes);
     loaded(relative, bytes.byteLength);
@@ -165,7 +192,23 @@ export function installLazyAssets(
       args[0] = load(path) ?? path;
       return originalLstat.apply(FS, args);
     };
-    // Shared fonts/INI lists are still required before the engine starts.
-    for (const path of manifest.preload || []) load(path);
+    const preload = manifest.preload || [];
+    for (const path of preload) {
+      if (!binaryAssets.has(normalize(path))) load(path);
+    }
+    if (binaryAssets.size) {
+      // Synchronous XHR on the main thread exposes a text response. Its BOM
+      // detection can override x-user-defined, so fetch these assets as bytes.
+      const dependency = "wolftools-binary-assets";
+      addRunDependency(dependency);
+      Promise.all(Array.from(binaryAssets.keys(), preloadBinaryAsset))
+        .then(() => {
+          for (const path of preload) {
+            if (binaryAssets.has(normalize(path))) load(path);
+          }
+        })
+        .catch((error) => console.error(error))
+        .finally(() => removeRunDependency(dependency));
+    }
   });
 }

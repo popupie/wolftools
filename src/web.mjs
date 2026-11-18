@@ -5,6 +5,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readdir,
   rename,
@@ -30,7 +31,7 @@ import { installLazyAssets } from "./browser/lazy-assets.mjs";
 
 export const BROWSER_WODITOR_VERSION = "0.6.3.0";
 export const LEGACY_BROWSER_WODITOR_VERSION = "0.4.1.0";
-export const WEB_EXPORT_VERSION = "2026.11.17.4";
+export const WEB_EXPORT_VERSION = "2026.11.18";
 
 const RUNTIME_CHECKSUMS = new Map([
   [
@@ -492,15 +493,31 @@ async function copyGameSupportFiles(sourceDir, outputDir) {
   }
 }
 
+export async function assetHasUnicodeBom(path) {
+  const file = await open(path, "r");
+  try {
+    const prefix = Buffer.alloc(3);
+    const { bytesRead } = await file.read(prefix, 0, prefix.length, 0);
+    const first = prefix.readUInt16BE(0);
+    return (
+      (bytesRead >= 2 && (first === 0xfffe || first === 0xfeff)) ||
+      (bytesRead === 3 && first === 0xefbb && prefix[2] === 0xbf)
+    );
+  } finally {
+    await file.close();
+  }
+}
+
 async function createAssetManifest(dataDir) {
   const paths = await listFiles(dataDir);
   const files = [];
   let bytes = 0;
   for (const path of paths) {
-    const size = (await stat(join(dataDir, path))).size;
+    const source = join(dataDir, path);
+    const size = (await stat(source)).size;
     let audio;
     try {
-      audio = await browserAudioMetadata(join(dataDir, path));
+      audio = await browserAudioMetadata(source);
     } catch (error) {
       console.warn(
         `${error.message} This file will use the existing asset loader if requested.`,
@@ -510,6 +527,7 @@ async function createAssetManifest(dataDir) {
       path: `Data/${path}`,
       bytes: size,
       ...(audio ? { audio } : {}),
+      ...((await assetHasUnicodeBom(source)) ? { hasUnicodeBom: true } : {}),
     });
     bytes += size;
   }
@@ -653,7 +671,11 @@ async function createSharedBrowserData(sourceDir, outputDir, runtimeVersion) {
     if (!details) continue;
     if (!details.isFile())
       throw new Error(`Shared support asset must be a regular file: ${path}`);
-    manifest.files.push({ path: filename, bytes: details.size });
+    manifest.files.push({
+      path: filename,
+      bytes: details.size,
+      ...((await assetHasUnicodeBom(path)) ? { hasUnicodeBom: true } : {}),
+    });
     manifest.bytes += details.size;
     manifest.preload.push(filename);
     // Drop a bundled fallback when the shared game supplies this asset.

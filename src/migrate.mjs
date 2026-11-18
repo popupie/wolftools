@@ -21,6 +21,7 @@ import { requireDirectory, requireFile } from "./files.mjs";
 import {
   LEGACY_BROWSER_WODITOR_VERSION,
   WEB_EXPORT_VERSION,
+  assetHasUnicodeBom,
   indexWithCanvasFit,
   indexWithLazyAssetLoader,
   lazyAssetLoaderSource,
@@ -168,7 +169,7 @@ async function canvasFitUpdates(outputDir, _metadata, pending) {
     : new Map([["index.html", fittedIndex]]);
 }
 
-async function bootArchiveUpdates(outputDir, metadata, _pending, workDir) {
+async function bootArchiveUpdates(outputDir, metadata, _pending, { workDir }) {
   const updates = new Map();
   if (metadata.data?.delivery !== "files") return updates;
 
@@ -187,6 +188,38 @@ async function bootArchiveUpdates(outputDir, metadata, _pending, workDir) {
   if (await writeBrowserBootArchive(archivePath, { assets, previousArchive })) {
     updates.set("Data.wolf", { sourcePath: archivePath });
   }
+  return updates;
+}
+
+async function binaryAssetUpdates(
+  outputDir,
+  metadata,
+  pending,
+  { runtimeVersion },
+) {
+  const updates = new Map();
+  if (metadata.data?.delivery !== "files") return updates;
+
+  const manifestPath = "asset_manifest.json";
+  const manifest = pending.has(manifestPath)
+    ? JSON.parse(pending.get(manifestPath))
+    : await readJson(join(outputDir, manifestPath));
+  if (!Array.isArray(manifest?.files))
+    throw new Error("The asset manifest has no files array.");
+  const gameRoot = usesSharedAssets(metadata) ? dirname(outputDir) : outputDir;
+  for (const entry of manifest.files) {
+    const path = assetPath(gameRoot, entry?.path);
+    const hasBom = await assetHasUnicodeBom(path).catch((error) => {
+      if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+      return false;
+    });
+    if (hasBom) entry.hasUnicodeBom = true;
+  }
+  updates.set(manifestPath, `${JSON.stringify(manifest)}\n`);
+  const index =
+    pending.get("index.html") ??
+    (await readFile(join(outputDir, "index.html"), "utf8"));
+  updateAssetLoader(updates, index, metadata, runtimeVersion);
   return updates;
 }
 
@@ -229,6 +262,7 @@ const migrations = [
   { version: "2026.11.04", prepare: deferredAudioUpdates },
   { version: "2026.11.17", prepare: canvasFitUpdates },
   { version: "2026.11.17.4", prepare: bootArchiveUpdates },
+  { version: "2026.11.18", prepare: binaryAssetUpdates },
 ];
 
 async function applyUpdates(outputDir, updates) {
@@ -376,12 +410,10 @@ async function migrateExportFiles(
       compareExportVersions(version, WEB_EXPORT_VERSION) > 0
     )
       continue;
-    for (const [path, content] of await prepare(
-      outputDir,
-      metadata,
-      updates,
+    for (const [path, content] of await prepare(outputDir, metadata, updates, {
       workDir,
-    ))
+      runtimeVersion,
+    }))
       updates.set(path, content);
   }
 
@@ -390,16 +422,6 @@ async function migrateExportFiles(
     if (runtimeChanged)
       await updateRuntime(updates, zip, metadata, runtimeVersion);
   }
-  if (
-    !runtimeChanged &&
-    legacy &&
-    metadata.data?.delivery === "files" &&
-    compareExportVersions(previousVersion, "2026.11.17.3") < 0
-  ) {
-    const index = await readFile(join(outputDir, "index.html"), "utf8");
-    updateAssetLoader(updates, index, metadata, runtimeVersion);
-  }
-
   const migrated =
     comparison < 0 || runtimeChanged || runtimePin !== metadata.runtimePin;
   if (migrated) {
