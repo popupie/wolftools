@@ -31,7 +31,7 @@ import { installLazyAssets } from "./browser/lazy-assets.mjs";
 
 export const BROWSER_WODITOR_VERSION = "0.6.3.0";
 export const LEGACY_BROWSER_WODITOR_VERSION = "0.4.1.0";
-export const WEB_EXPORT_VERSION = "2026.11.18";
+export const WEB_EXPORT_VERSION = "2026.11.18.1";
 
 const RUNTIME_CHECKSUMS = new Map([
   [

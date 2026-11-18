@@ -191,12 +191,7 @@ async function bootArchiveUpdates(outputDir, metadata, _pending, { workDir }) {
   return updates;
 }
 
-async function binaryAssetUpdates(
-  outputDir,
-  metadata,
-  pending,
-  { runtimeVersion },
-) {
+async function binaryAssetUpdates(outputDir, metadata, pending) {
   const updates = new Map();
   if (metadata.data?.delivery !== "files") return updates;
 
@@ -216,6 +211,18 @@ async function binaryAssetUpdates(
     if (hasBom) entry.hasUnicodeBom = true;
   }
   updates.set(manifestPath, `${JSON.stringify(manifest)}\n`);
+  return updates;
+}
+
+async function lazyDirectoryUpdates(
+  outputDir,
+  metadata,
+  pending,
+  { runtimeVersion },
+) {
+  const updates = new Map();
+  if (metadata.data?.delivery !== "files") return updates;
+
   const index =
     pending.get("index.html") ??
     (await readFile(join(outputDir, "index.html"), "utf8"));
@@ -263,6 +270,7 @@ const migrations = [
   { version: "2026.11.17", prepare: canvasFitUpdates },
   { version: "2026.11.17.4", prepare: bootArchiveUpdates },
   { version: "2026.11.18", prepare: binaryAssetUpdates },
+  { version: "2026.11.18.1", prepare: lazyDirectoryUpdates },
 ];
 
 async function applyUpdates(outputDir, updates) {

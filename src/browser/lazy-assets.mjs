@@ -59,10 +59,19 @@ export function installLazyAssets(
   }
 
   const available = new Map();
+  const directories = new Set();
   for (const file of manifest.files) {
     const stored = normalize(file.path);
     for (const key of pathKeys(stored)) available.set(key, stored);
+    if (!stored.toLowerCase().startsWith("data/")) continue;
+    for (let end = stored.lastIndexOf("/"); end > 0; ) {
+      const parent = stored.slice(0, end);
+      if (directories.has(parent)) break;
+      directories.add(parent);
+      end = parent.lastIndexOf("/");
+    }
   }
+  const directoryKeys = new Set([...directories].flatMap(pathKeys));
   const stats = {
     requests: 0,
     bytes: 0,
@@ -120,13 +129,24 @@ export function installLazyAssets(
 
   function load(path) {
     const requested = normalize(path);
-    const relative = pathKeys(requested)
+    const keys = pathKeys(requested);
+    const relative = keys
       .map((key) => available.get(key))
       .find((candidate) => candidate !== undefined);
     const audioPath = audio.resolve(requested, relative);
     if (audioPath) return audioPath;
+    const absolute = `/${requested}`;
     if (!relative) {
       const lower = requested.toLowerCase();
+      const isAssetDirectory =
+        keys.some((key) => directoryKeys.has(key)) ||
+        (/^data0\/[^/]+-gamecache\/data$/u.test(lower) &&
+          directoryKeys.has("data"));
+      // Browser Woditor probes the parent directory before opening a loose file.
+      if (isAssetDirectory && !/^data0\/[^/]+-save\//u.test(lower)) {
+        if (!FS.analyzePath(absolute).exists) FS.mkdirTree(absolute);
+        return;
+      }
       if (
         lower.includes("data/") &&
         /\.[^/.]{1,8}$/u.test(requested) &&
@@ -142,7 +162,6 @@ export function installLazyAssets(
       }
       return;
     }
-    const absolute = `/${requested}`;
     if (FS.analyzePath(absolute).exists) return;
     let bytes = binaryAssets.get(relative);
     if (binaryAssets.has(relative)) {
