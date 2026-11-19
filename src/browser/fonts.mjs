@@ -27,7 +27,7 @@ function namingTable(table) {
     const platform = table.readUInt16BE(entry);
     const encoding = table.readUInt16BE(entry + 2);
     const name = table.readUInt16BE(entry + 6);
-    if (name !== 1 && name !== 4) continue;
+    if (![1, 4, 16].includes(name)) continue;
     const decoder =
       platform === 0 || (platform === 3 && [0, 1, 10].includes(encoding))
         ? utf16
@@ -154,14 +154,21 @@ export async function browserFontUpdates(
   const customRootFonts = [...rootFonts.values()].filter(
     (path) => !defaultFonts.has(basename(path)),
   );
-  for (const sourcePath of [...customRootFonts, ...fontFiles]) {
+  for (const supplied of [...customRootFonts, ...fontFiles]) {
+    const {
+      sourcePath,
+      exportPath,
+      names: allowedNames,
+    } = typeof supplied === "string" ? { sourcePath: supplied } : supplied;
     const bytes = await readFile(sourcePath).catch(absent);
     if (!bytes) continue;
     for (const { directory, standaloneExtension } of fontDirectories(bytes)) {
       const nameTable = fontNameTable(bytes, directory);
       if (!nameTable) continue;
       const names = namingTable(nameTable).filter(
-        (name) => !registered.has(name),
+        (name) =>
+          !registered.has(name) &&
+          (!allowedNames || allowedNames.includes(name)),
       );
       if (!names.length) continue;
 
@@ -180,7 +187,10 @@ export async function browserFontUpdates(
           .slice(0, 16);
         const extension =
           standaloneExtension ?? extname(sourcePath).toLowerCase();
-        filename = `assets/wolftools-font-${hash}${extension}`;
+        // Catalog fonts can retain the distributor's original filename.
+        filename =
+          (!standaloneExtension && exportPath) ||
+          `assets/wolftools-font-${hash}${extension}`;
         updates.set(filename, standaloneExtension ? font : { sourcePath });
       }
       for (const name of names) {

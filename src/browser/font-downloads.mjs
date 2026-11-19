@@ -40,9 +40,78 @@ async function atomicWrite(path, bytes) {
   }
 }
 
+async function fontArchive(spec, cacheDir, fetchImpl, archives) {
+  const key = `${spec.sha256}:${spec.filenameEncoding ?? "utf-8"}`;
+  if (!archives.has(key))
+    archives.set(
+      key,
+      (async () => {
+        const directory = join(cacheDir, "archives");
+        const path = join(directory, `${spec.sha256}.zip`);
+        let bytes;
+        try {
+          bytes = verify(await readFile(path), spec);
+        } catch (error) {
+          if (
+            !["ENOENT", "ENOTDIR"].includes(error.code) &&
+            !error.message.startsWith("SHA-256 mismatch")
+          )
+            throw error;
+          bytes = await download(spec, fetchImpl);
+          await mkdir(directory, { recursive: true });
+          await atomicWrite(path, bytes);
+        }
+        return JSZip.loadAsync(
+          bytes,
+          spec.filenameEncoding
+            ? {
+                decodeFileName: (value) =>
+                  new TextDecoder(spec.filenameEncoding, {
+                    fatal: true,
+                  }).decode(value),
+              }
+            : {},
+        );
+      })(),
+    );
+  return archives.get(key);
+}
+
+function fontSource(font) {
+  const lines = [
+    `Source: ${font.source}`,
+    ...(font.copyright ? [`Copyright: ${font.copyright}`] : []),
+    `Font SHA-256: ${font.files[0].sha256}`,
+    ...[font.archive?.url, ...font.files.map((file) => file.url)]
+      .filter(Boolean)
+      .map((url) => `Download: ${url}`),
+  ];
+  if (font.license === "IPA-1.0")
+    lines.push(
+      "License: IPA Font License Agreement v1.0 (see the accompanying license).",
+      "Use of this font constitutes acceptance of that license.",
+    );
+  if (font.replacement)
+    lines.push(
+      "",
+      "Replacing this derived font with its original IPA font:",
+      `1. Download the original font from ${font.replacement.source}`,
+      `   Original files: ${font.replacement.files.join(", ")}.`,
+      "2. Copy the chosen original font into this web export (for example, assets/fonts/original-ipa/).",
+      "3. In FontList.ini, change the file path before '=' on each affected mapping to the copied font path. Keep the requested name after '=' unchanged.",
+      "4. Reload the game. The runtime will use the original IPA font for those mappings.",
+      "The supplied font files are unmodified; the author's original replacement instructions are also included.",
+    );
+  return `${lines.join("\n")}\n`;
+}
+
 export async function loadCachedFont(
   font,
-  { cacheDir = getFontCacheDir(), fetchImpl = globalThis.fetch } = {},
+  {
+    cacheDir = getFontCacheDir(),
+    fetchImpl = globalThis.fetch,
+    archives = new Map(),
+  } = {},
 ) {
   const directory = join(
     cacheDir,
@@ -64,7 +133,7 @@ export async function loadCachedFont(
       throw error;
     console.log(`Downloading font: ${font.names[0]}`);
     const archive = font.archive
-      ? await JSZip.loadAsync(await download(font.archive, fetchImpl))
+      ? await fontArchive(font.archive, cacheDir, fetchImpl, archives)
       : undefined;
     files = await Promise.all(
       font.files.map(async (file) => {
@@ -97,13 +166,7 @@ export async function loadCachedFont(
       filename: file.filename,
       sourcePath: join(directory, file.filename),
     })),
-    source: `Source: ${font.source}\nFont SHA-256: ${font.files[0].sha256}\n${[
-      font.archive?.url,
-      ...font.files.map((file) => file.url),
-    ]
-      .filter(Boolean)
-      .map((url) => `Download: ${url}`)
-      .join("\n")}\n`,
+    source: fontSource(font),
   };
 }
 
@@ -118,15 +181,24 @@ export async function requestedFontUpdates({
 }) {
   const updates = new Map();
   const initial = await checkGameFonts({ ...options, pending, report: false });
-  const wanted = catalog.filter((font) =>
-    font.names.some((name) => initial?.missing?.includes(key(name))),
-  );
+  // Some weights share a family name. The first matching record is the default
+  // a specific full/typographic family name still selects its exact variant.
+  const wanted = [
+    ...new Set(
+      (initial?.missing ?? []).map((requested) =>
+        catalog.find((font) =>
+          font.names.some((name) => key(name) === requested),
+        ),
+      ),
+    ),
+  ].filter(Boolean);
+  const archives = new Map();
   const downloaded = await Promise.all(
     wanted.map(async (font) => {
       try {
         return {
           font,
-          ...(await loadCachedFont(font, { cacheDir, fetchImpl })),
+          ...(await loadCachedFont(font, { cacheDir, fetchImpl, archives })),
         };
       } catch (error) {
         console.warn(
@@ -141,7 +213,9 @@ export async function requestedFontUpdates({
     // Remove broken registrations for the families we are repairing; leaving
     // duplicate names could make the runtime choose the old, missing file.
     const repaired = new Set(
-      available.flatMap(({ font }) => font.names.map(key)),
+      available
+        .flatMap(({ font }) => font.names.map(key))
+        .filter((name) => initial.missing.includes(name)),
     );
     let list = staged.get("FontList.ini");
     if (list?.sourcePath) list = await readFile(list.sourcePath);
@@ -183,7 +257,22 @@ export async function requestedFontUpdates({
     for (const [path, value] of await browserFontUpdates(
       options.outputDir,
       options.outputDir,
-      available.map((font) => font.fontPath),
+      available.map(({ font, fontPath }) => ({
+        sourcePath: fontPath,
+        ...(font.preserveFilename
+          ? {
+              exportPath: `assets/fonts/${font.id}/${font.files[0].filename}`,
+            }
+          : {}),
+        // Shared family names belong to their default variant, even when
+        // only another weight's full name was requested for this export.
+        names: font.names.filter(
+          (name) =>
+            catalog.find((candidate) =>
+              candidate.names.some((alias) => key(alias) === key(name)),
+            ) === font,
+        ),
+      })),
       staged,
     ))
       updates.set(path, value);

@@ -68,17 +68,30 @@ The default is `--separate true`. If you omit `--out` (`-o`), the tool adds
 wolftools finds `Game.exe` or `GamePro.exe` and extracts supported archives.
 It accepts a game with a `Data/` folder or a `Data.wolf` archive.
 
+For exports with unpacked assets, wolftools puts existing files named by literal
+`GET_FILE_EXIST` checks into the browser's startup `Data.wolf`. Paths assembled at runtime or stored in
+encrypted event data may need to be packed manually.
+
 If `Game.ini` is missing, the tool creates a default one for the website.
 
 When a requested font is missing, the exporter automatically tries to download it. Downloads and licenses are
 checked against SHA-256 hashes and cached under `~/.cache/wolftools/fonts/` for
 reuse across games. The export bundles the font, registers its internal names in
-`FontList.ini`, and includes its license under `assets/font-licenses/`. Support: `07ロゴたいぷゴシックCondense`
-(`07LogoTypeGothic-Condense`), `NemukeMedium`, and `梅ゴシック` (`Ume Gothic`).
+`FontList.ini`, and includes its license under `assets/font-licenses/`.
 
-For exports with unpacked assets, wolftools puts existing files named by literal
-`GET_FILE_EXIST` checks into the browser's startup `Data.wolf`. Paths assembled at runtime or stored in
-encrypted event data may need to be packed manually.
+Supported families and variants:
+
+| Family                      | Variants                                                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------------- |
+| ロゴたいぷゴシック Condense | `07ロゴたいぷゴシックCondense`                                                               |
+| ねむけ                      | `NemukeMedium`                                                                               |
+| 梅ゴシック                  | `梅ゴシック`,                                                                                |
+| IPA明朝・ゴシック           | `IPA明朝`, `IPAゴシック`, `IPA P明朝`, `IPA Pゴシック`                                       |
+| IPAex明朝・ゴシック         | `IPAex明朝`, `IPAexゴシック`                                                                 |
+| 刻明朝                      | `刻明朝 Regular`                                                                             |
+| やさしさアンチック          | `07やさしさアンチック`                                                                       |
+| やさしさゴシック            | Original Regular/Bold (`07…` names), legacy OpenType names, and `やさしさゴシックボールドV2` |
+| 源暎ラテゴ・ラテミン        | Original and `v2` families, including `源暎ラテゴ 詰 v2`, `源暎ラテミン 詰 v2`               |
 
 ### Share one game folder
 
