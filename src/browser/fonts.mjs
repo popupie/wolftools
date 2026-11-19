@@ -49,8 +49,44 @@ function namingTable(table) {
   return [...names];
 }
 
+export function fontNames(bytes) {
+  return [
+    ...new Set(
+      [...fontDirectories(bytes)].flatMap(({ directory }) => {
+        const table = fontNameTable(bytes, directory);
+        return table ? namingTable(table) : [];
+      }),
+    ),
+  ];
+}
+
 function absent(error) {
   if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+}
+
+function fontListWithBom(content) {
+  // Browser Woditor treats BOM-less text as CP932, including FontList.ini.
+  return /[^\x00-\x7f]/u.test(content) && !content.startsWith("\uFEFF")
+    ? `\uFEFF${content}`
+    : content;
+}
+
+export async function browserFontEncodingUpdates(outputDir, pending) {
+  const updates = new Map();
+  const list =
+    pending.get(fontListPath) ??
+    (await readFile(join(outputDir, fontListPath)).catch(absent));
+  if (list === undefined) return updates;
+  let content;
+  try {
+    content = typeof list === "string" ? list : utf8.decode(list);
+  } catch (error) {
+    if (error instanceof TypeError) return updates;
+    throw error;
+  }
+  const encoded = fontListWithBom(content);
+  if (encoded !== content) updates.set(fontListPath, encoded);
+  return updates;
 }
 
 export async function unpackBrowserFonts(archivePath, outputDir) {
@@ -66,17 +102,24 @@ export async function unpackBrowserFonts(archivePath, outputDir) {
   }
 }
 
-export async function browserFontUpdates(outputDir, gameRoot, fontFiles) {
+export async function browserFontUpdates(
+  outputDir,
+  gameRoot,
+  fontFiles,
+  pending = new Map(),
+) {
   const updates = new Map();
   const outputList = join(outputDir, fontListPath);
   const exportedList = await readFile(outputList).catch(absent);
-  const list =
+  let list =
+    pending.get(fontListPath) ??
     exportedList ??
     (await readFile(join(gameRoot, fontListPath)).catch(absent));
+  if (list?.sourcePath) list = await readFile(list.sourcePath);
   // Preserve mappings, including their original spelling and order.
   let content;
   try {
-    content = list ? utf8.decode(list) : "";
+    content = typeof list === "string" ? list : list ? utf8.decode(list) : "";
   } catch (error) {
     if (error instanceof TypeError) return updates;
     throw error;
@@ -89,7 +132,7 @@ export async function browserFontUpdates(outputDir, gameRoot, fontFiles) {
   );
   const registered = new Set();
   const published = new Map();
-  for (const line of content.split(/\r?\n/u)) {
+  for (const line of content.replace(/^\uFEFF/u, "").split(/\r?\n/u)) {
     if (/^\s*[;#]/u.test(line)) continue;
     const delimiter = line.indexOf("=");
     if (delimiter < 1) continue;
@@ -151,8 +194,10 @@ export async function browserFontUpdates(outputDir, gameRoot, fontFiles) {
     const separator = content && !content.endsWith("\n") ? newline : "";
     updates.set(
       fontListPath,
-      content + separator + additions.join(newline) + newline,
+      fontListWithBom(content + separator + additions.join(newline) + newline),
     );
+  } else if (fontListWithBom(content) !== content) {
+    updates.set(fontListPath, fontListWithBom(content));
   } else if (list && !exportedList) {
     updates.set(fontListPath, list);
   }

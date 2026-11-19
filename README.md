@@ -70,6 +70,12 @@ It accepts a game with a `Data/` folder or a `Data.wolf` archive.
 
 If `Game.ini` is missing, the tool creates a default one for the website.
 
+When a requested font is missing, the exporter automatically tries to download it. Downloads and licenses are
+checked against SHA-256 hashes and cached under `~/.cache/wolftools/fonts/` for
+reuse across games. The export bundles the font, registers its internal names in
+`FontList.ini`, and includes its license under `assets/font-licenses/`. Support: `07ロゴたいぷゴシックCondense`
+(`07LogoTypeGothic-Condense`), `NemukeMedium`, and `梅ゴシック` (`Ume Gothic`).
+
 For exports with unpacked assets, wolftools puts existing files named by literal
 `GET_FILE_EXIST` checks into the browser's startup `Data.wolf`. Paths assembled at runtime or stored in
 encrypted event data may need to be packed manually.
@@ -250,6 +256,8 @@ Its runtime files are not included in this repository.
 
 ## Web export version
 
+- `2026.11.19.2`: Marks UTF-8 font lists with a BOM so Japanese font names are recognized.
+- `2026.11.19.1`: Fetches the asset manifest and startup preloads asynchronously, loads preloads concurrently.
 - `2026.11.19`: Adds a new font migration for fonts bundled inside standalone `Data.wolf` web ports and individual faces from `.ttc` and `.otc` collections.
 - `2026.11.18.2`: Registers supplied TrueType and OpenType fonts by name in Browser Woditor's `FontList.ini`.
 - `2026.11.18.1`: Makes asset directories visible to Browser Woditor before their files are loaded.

@@ -180,7 +180,7 @@ export async function runCli(
       if (!result.migrated)
         return `Web export is already at version ${version}. No files were changed.\n${output}`;
       if (result.previousVersion === result.version)
-        return `Updated web export runtime settings (Browser Woditor ${result.runtimeVersion}).\n${output}\n`;
+        return `Updated web export ${result.fontsChanged ? "fonts and settings" : "runtime settings"} (Browser Woditor ${result.runtimeVersion}).\n${output}\n`;
       return `Migrated web export from version ${result.previousVersion} to ${version}.\n${output}\n`;
     }
     if (layout !== undefined && layout !== "true" && layout !== "false") {

@@ -18,11 +18,13 @@ import {
   writeBrowserBootArchive,
 } from "./browser/file-checks.mjs";
 import {
+  browserFontEncodingUpdates,
   browserFontUpdates,
   FONT_FILE,
   unpackBrowserFonts,
 } from "./browser/fonts.mjs";
 import { requireDirectory, requireFile } from "./files.mjs";
+import { requestedFontUpdates } from "./browser/font-downloads.mjs";
 import {
   LEGACY_BROWSER_WODITOR_VERSION,
   WEB_EXPORT_VERSION,
@@ -248,7 +250,7 @@ function updateAssetLoader(updates, index, metadata, runtimeVersion) {
 
 async function fontRegistrationUpdates(outputDir, metadata, pending) {
   if (metadata.data?.delivery !== "files")
-    return browserFontUpdates(outputDir, outputDir, []);
+    return browserFontUpdates(outputDir, outputDir, [], pending);
 
   const gameRoot = usesSharedAssets(metadata) ? dirname(outputDir) : outputDir;
   const manifestPath = "asset_manifest.json";
@@ -266,7 +268,7 @@ async function fontRegistrationUpdates(outputDir, metadata, pending) {
         FONT_FILE.test(path),
     )
     .map((path) => assetPath(gameRoot, path));
-  return browserFontUpdates(outputDir, gameRoot, looseFonts);
+  return browserFontUpdates(outputDir, gameRoot, looseFonts, pending);
 }
 
 async function bundledFontRegistrationUpdates(
@@ -282,7 +284,11 @@ async function bundledFontRegistrationUpdates(
     join(outputDir, "Data.wolf"),
     join(workDir, "fonts"),
   );
-  return browserFontUpdates(outputDir, outputDir, fonts);
+  return browserFontUpdates(outputDir, outputDir, fonts, pending);
+}
+
+async function fontEncodingUpdates(outputDir, _metadata, pending) {
+  return browserFontEncodingUpdates(outputDir, pending);
 }
 
 async function updateRuntime(updates, zip, metadata, runtimeVersion) {
@@ -317,6 +323,8 @@ const migrations = [
   { version: "2026.11.18.1", prepare: lazyDirectoryUpdates },
   { version: "2026.11.18.2", prepare: fontRegistrationUpdates },
   { version: "2026.11.19", prepare: bundledFontRegistrationUpdates },
+  { version: "2026.11.19.1", prepare: lazyDirectoryUpdates },
+  { version: "2026.11.19.2", prepare: fontEncodingUpdates },
 ];
 
 async function applyUpdates(outputDir, updates) {
@@ -477,8 +485,26 @@ async function migrateExportFiles(
     if (runtimeChanged)
       await updateRuntime(updates, zip, metadata, runtimeVersion);
   }
+  const fontUpdates = await requestedFontUpdates({
+    dataDir:
+      metadata.data?.delivery === "files"
+        ? join(
+            usesSharedAssets(metadata) ? dirname(outputDir) : outputDir,
+            "Data",
+          )
+        : undefined,
+    archivePath:
+      updates.get("Data.wolf")?.sourcePath ?? join(outputDir, "Data.wolf"),
+    outputDir,
+    pending: updates,
+  });
+  for (const [path, content] of fontUpdates) updates.set(path, content);
+
   const migrated =
-    comparison < 0 || runtimeChanged || runtimePin !== metadata.runtimePin;
+    comparison < 0 ||
+    runtimeChanged ||
+    runtimePin !== metadata.runtimePin ||
+    fontUpdates.size > 0;
   if (migrated) {
     metadata.exportVersion = WEB_EXPORT_VERSION;
     metadata.runtime = runtime;
@@ -494,6 +520,7 @@ async function migrateExportFiles(
     version: WEB_EXPORT_VERSION,
     runtimeVersion,
     migrated,
+    fontsChanged: fontUpdates.size > 0,
     files: [...updates.keys()],
   };
 }

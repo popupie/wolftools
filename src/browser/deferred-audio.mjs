@@ -503,11 +503,11 @@ export function createDeferredAudioLoader(Module, files, options) {
       };
     },
 
-    resolve(requested, stored) {
+    resolve(requested, stored, metadataOnly = false) {
       const record = records.get(stored);
       if (record) {
         const path = virtualFile(record);
-        if (record.state === "idle") void download(record);
+        if (!metadataOnly && record.state === "idle") void download(record);
         return path;
       }
       // DxLib supports _loop.txt for all audio types. Preserve embedded Ogg

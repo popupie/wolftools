@@ -34,10 +34,11 @@ import {
   unpackBrowserFonts,
 } from "./browser/fonts.mjs";
 import { installLazyAssets } from "./browser/lazy-assets.mjs";
+import { requestedFontUpdates } from "./browser/font-downloads.mjs";
 
 export const BROWSER_WODITOR_VERSION = "0.6.3.0";
 export const LEGACY_BROWSER_WODITOR_VERSION = "0.4.1.0";
-export const WEB_EXPORT_VERSION = "2026.11.19";
+export const WEB_EXPORT_VERSION = "2026.11.19.2";
 
 const RUNTIME_CHECKSUMS = new Map([
   [
@@ -756,12 +757,14 @@ export async function packageWolfGame({
     if (fittedIndex !== index) await writeFile(indexPath, fittedIndex);
     let data;
     let fontFiles;
+    let fontDataDir;
     const packedFontDir = join(staging, `.fonts-${randomUUID()}`);
     if (kind === "native") {
       const manifest = separate
         ? await createLooseBrowserData(source, staging, runtimeVersion)
         : await createSharedBrowserData(source, staging, runtimeVersion);
       const assetRoot = separate ? staging : source;
+      fontDataDir = join(assetRoot, "Data");
       fontFiles = manifest.files
         .map((entry) => entry.path)
         .filter((path) => path.startsWith("Data/") && FONT_FILE.test(path))
@@ -808,6 +811,17 @@ export async function packageWolfGame({
       } else {
         await writeFile(target, content);
       }
+    }
+
+    for (const [path, content] of await requestedFontUpdates({
+      dataDir: fontDataDir,
+      archivePath: kind === "prepared" ? join(staging, "Data.wolf") : undefined,
+      outputDir: staging,
+    })) {
+      const target = join(staging, path);
+      await mkdir(dirname(target), { recursive: true });
+      if (content.sourcePath) await copyFile(content.sourcePath, target);
+      else await writeFile(target, content);
     }
 
     if (kind === "prepared")
