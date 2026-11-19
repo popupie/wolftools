@@ -64,10 +64,7 @@ async function unpackArchives(
   for (const archive of archives) {
     if (proMode && isWolfProKeyArchive(archive)) continue;
     const relativeParent = relative(sourceFolder, dirname(archive));
-    if (
-      relativeParent === ".." ||
-      relativeParent.startsWith(`..${sep}`)
-    ) {
+    if (relativeParent === ".." || relativeParent.startsWith(`..${sep}`)) {
       throw new Error(`Archive is outside the source folder: ${archive}`);
     }
     const output = join(destinationFolder, relativeParent, parse(archive).name);
@@ -96,7 +93,7 @@ async function readCryptVersion(archivePath) {
   }
 }
 
-async function unpackArchive(archivePath, outputDir, options) {
+export async function unpackArchive(archivePath, outputDir, options) {
   const archive = await open(archivePath, "r");
   let prefix;
   try {
@@ -109,9 +106,9 @@ async function unpackArchive(archivePath, outputDir, options) {
     return unpackDx8Archive(archivePath, outputDir, options);
   }
   if (detectDx5Header(prefix.subarray(0, 28))) {
-    return unpackDx5Archive(archivePath, outputDir);
+    return unpackDx5Archive(archivePath, outputDir, options);
   }
-  return unpackDx6Archive(archivePath, outputDir);
+  return unpackDx6Archive(archivePath, outputDir, options);
 }
 
 export async function unpackWolf({ sourcePath, outputDir }) {

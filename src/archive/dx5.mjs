@@ -196,7 +196,11 @@ async function writeDecodedFile({ archive, header, key, file, outputPath }) {
   }
 }
 
-export async function unpackDx5Archive(archivePath, outputDir) {
+export async function unpackDx5Archive(
+  archivePath,
+  outputDir,
+  { includeFile } = {},
+) {
   const archive = await open(archivePath, "r");
   try {
     const details = await archive.stat();
@@ -246,7 +250,7 @@ export async function unpackDx5Archive(archivePath, outputDir) {
         const path = join(destination, name);
         if ((file.attributes & DIRECTORY_ATTRIBUTE) !== 0) {
           await extractDirectory(file.dataAddress, path);
-        } else {
+        } else if (!includeFile || includeFile(name)) {
           await writeDecodedFile({
             archive,
             header,

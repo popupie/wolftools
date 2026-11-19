@@ -1,13 +1,13 @@
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 
-import packageJson from "../package.json" with { type: "json" };
 import { PACK_MODES } from "./constants.mjs";
 import { formatInspection, inspectPath } from "./inspect.mjs";
 import { packWolf } from "./pack.mjs";
 import { unpackWolf, unpackWolfInPlace } from "./unpack.mjs";
 import {
   BROWSER_WODITOR_VERSION,
+  WEB_EXPORT_VERSION,
   inspectCombinedGame,
   packageWolfGame,
   resolveRuntimeVersion,
@@ -139,7 +139,7 @@ export async function runCli(
     global ? argv : rest,
     commandOptions,
   );
-  if (options.version) return packageJson.version;
+  if (options.version) return WEB_EXPORT_VERSION;
   if (options.help) return helpText();
   if (command === "help") {
     requireCount(command, positionals, 0);

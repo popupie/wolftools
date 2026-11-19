@@ -523,7 +523,7 @@ export async function unpackDx8Archive(archivePath, outputDir, options = {}) {
         const path = join(destination, name);
         if ((file.attributes & DIRECTORY_ATTRIBUTE) !== 0) {
           await extractDirectory(file.dataAddress, path);
-        } else {
+        } else if (!options.includeFile || options.includeFile(name)) {
           const fileCipher = keyString
             ? createCipher(
                 mode,

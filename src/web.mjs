@@ -28,12 +28,16 @@ import {
   findCheckedAssets,
   writeBrowserBootArchive,
 } from "./browser/file-checks.mjs";
-import { browserFontUpdates, FONT_FILE } from "./browser/fonts.mjs";
+import {
+  browserFontUpdates,
+  FONT_FILE,
+  unpackBrowserFonts,
+} from "./browser/fonts.mjs";
 import { installLazyAssets } from "./browser/lazy-assets.mjs";
 
 export const BROWSER_WODITOR_VERSION = "0.6.3.0";
 export const LEGACY_BROWSER_WODITOR_VERSION = "0.4.1.0";
-export const WEB_EXPORT_VERSION = "2026.11.18.2";
+export const WEB_EXPORT_VERSION = "2026.11.19";
 
 const RUNTIME_CHECKSUMS = new Map([
   [
@@ -751,13 +755,14 @@ export async function packageWolfGame({
     const fittedIndex = indexWithCanvasFit(index);
     if (fittedIndex !== index) await writeFile(indexPath, fittedIndex);
     let data;
-    let looseFonts = [];
+    let fontFiles;
+    const packedFontDir = join(staging, `.fonts-${randomUUID()}`);
     if (kind === "native") {
       const manifest = separate
         ? await createLooseBrowserData(source, staging, runtimeVersion)
         : await createSharedBrowserData(source, staging, runtimeVersion);
       const assetRoot = separate ? staging : source;
-      looseFonts = manifest.files
+      fontFiles = manifest.files
         .map((entry) => entry.path)
         .filter((path) => path.startsWith("Data/") && FONT_FILE.test(path))
         .map((path) => join(assetRoot, path));
@@ -784,13 +789,17 @@ export async function packageWolfGame({
     } else {
       process.stdout.write("Copying creator export...\n");
       await copyPreparedRelease(source, staging);
+      fontFiles = await unpackBrowserFonts(
+        join(staging, "Data.wolf"),
+        packedFontDir,
+      );
       data = { delivery: "archive", file: "Data.wolf" };
     }
 
     for (const [path, content] of await browserFontUpdates(
       staging,
       source,
-      looseFonts,
+      fontFiles,
     )) {
       const target = join(staging, path);
       if (content.sourcePath) {
@@ -800,6 +809,9 @@ export async function packageWolfGame({
         await writeFile(target, content);
       }
     }
+
+    if (kind === "prepared")
+      await rm(packedFontDir, { recursive: true, force: true });
 
     if (!(await exists(join(staging, "Game.ini")))) {
       await writeFile(join(staging, "Game.ini"), DEFAULT_GAME_INI);

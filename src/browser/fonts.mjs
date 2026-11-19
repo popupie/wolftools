@@ -2,29 +2,20 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 
-export const FONT_FILE = /\.(?:otf|ttf)$/iu;
+import { listFiles } from "../files.mjs";
+import { unpackArchive } from "../unpack.mjs";
+import {
+  extractFontFace,
+  fontDirectories,
+  fontNameTable,
+} from "./font-collection.mjs";
+
+export const FONT_FILE = /\.(?:otf|ttf|ttc|otc)$/iu;
 const fontListPath = "FontList.ini";
 const defaultFonts = new Set(["DefaultFont.ttf", "DefaultSubFont.ttf"]);
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const utf16 = new TextDecoder("utf-16be", { fatal: true });
 const macRoman = new TextDecoder("macintosh");
-
-function fontNames(bytes) {
-  if (bytes.length < 12) return [];
-  const signature = bytes.readUInt32BE(0);
-  if (signature !== 0x00010000 && signature !== 0x4f54544f) return [];
-  const tableEnd = 12 + 16 * bytes.readUInt16BE(4);
-  if (tableEnd > bytes.length) return [];
-
-  for (let entry = 12; entry < tableEnd; entry += 16) {
-    if (bytes.toString("ascii", entry, entry + 4) !== "name") continue;
-    const start = bytes.readUInt32BE(entry + 8);
-    const length = bytes.readUInt32BE(entry + 12);
-    if (length < 6 || start + length > bytes.length) return [];
-    return namingTable(bytes.subarray(start, start + length));
-  }
-  return [];
-}
 
 function namingTable(table) {
   const recordsEnd = 6 + 12 * table.readUInt16BE(2);
@@ -62,19 +53,30 @@ function absent(error) {
   if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
 }
 
-export async function browserFontUpdates(outputDir, gameRoot, looseFonts) {
+export async function unpackBrowserFonts(archivePath, outputDir) {
+  if (!(await stat(archivePath).catch(absent))?.isFile()) return [];
+  try {
+    const { files } = await unpackArchive(archivePath, outputDir, {
+      includeFile: (name) => FONT_FILE.test(name),
+    });
+    return files ? await listFiles(outputDir) : [];
+  } catch (error) {
+    console.warn(`Could not read fonts from ${archivePath}: ${error.message}`);
+    return [];
+  }
+}
+
+export async function browserFontUpdates(outputDir, gameRoot, fontFiles) {
   const updates = new Map();
   const outputList = join(outputDir, fontListPath);
   const exportedList = await readFile(outputList).catch(absent);
   const list =
     exportedList ??
     (await readFile(join(gameRoot, fontListPath)).catch(absent));
-  if (!list) return updates;
-
   // Preserve mappings, including their original spelling and order.
   let content;
   try {
-    content = utf8.decode(list);
+    content = list ? utf8.decode(list) : "";
   } catch (error) {
     if (error instanceof TypeError) return updates;
     throw error;
@@ -109,25 +111,39 @@ export async function browserFontUpdates(outputDir, gameRoot, looseFonts) {
   const customRootFonts = [...rootFonts.values()].filter(
     (path) => !defaultFonts.has(basename(path)),
   );
-  for (const sourcePath of [...customRootFonts, ...looseFonts]) {
+  for (const sourcePath of [...customRootFonts, ...fontFiles]) {
     const bytes = await readFile(sourcePath).catch(absent);
     if (!bytes) continue;
-    const names = fontNames(bytes).filter((name) => !registered.has(name));
-    if (!names.length) continue;
+    for (const { directory, standaloneExtension } of fontDirectories(bytes)) {
+      const nameTable = fontNameTable(bytes, directory);
+      if (!nameTable) continue;
+      const names = namingTable(nameTable).filter(
+        (name) => !registered.has(name),
+      );
+      if (!names.length) continue;
 
-    let filename = published.get(sourcePath);
-    if (!filename) {
-      // Use a URL-safe filename. All localized names share one copy.
-      const hash = createHash("sha256")
-        .update(bytes)
-        .digest("hex")
-        .slice(0, 16);
-      filename = `assets/wolftools-font-${hash}${extname(sourcePath).toLowerCase()}`;
-      updates.set(filename, { sourcePath });
-    }
-    for (const name of names) {
-      registered.add(name);
-      additions.push(`${filename}=${name}`);
+      let filename = standaloneExtension
+        ? undefined
+        : published.get(sourcePath);
+      if (!filename) {
+        // Give each collection face its own file so names select the right face.
+        const font = standaloneExtension
+          ? extractFontFace(bytes, directory)
+          : bytes;
+        if (!font) continue;
+        const hash = createHash("sha256")
+          .update(font)
+          .digest("hex")
+          .slice(0, 16);
+        const extension =
+          standaloneExtension ?? extname(sourcePath).toLowerCase();
+        filename = `assets/wolftools-font-${hash}${extension}`;
+        updates.set(filename, standaloneExtension ? font : { sourcePath });
+      }
+      for (const name of names) {
+        registered.add(name);
+        additions.push(`${filename}=${name}`);
+      }
     }
   }
   if (additions.length) {
@@ -137,7 +153,7 @@ export async function browserFontUpdates(outputDir, gameRoot, looseFonts) {
       fontListPath,
       content + separator + additions.join(newline) + newline,
     );
-  } else if (!exportedList) {
+  } else if (list && !exportedList) {
     updates.set(fontListPath, list);
   }
   return updates;

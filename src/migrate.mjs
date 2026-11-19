@@ -17,7 +17,11 @@ import {
   findCheckedAssets,
   writeBrowserBootArchive,
 } from "./browser/file-checks.mjs";
-import { browserFontUpdates, FONT_FILE } from "./browser/fonts.mjs";
+import {
+  browserFontUpdates,
+  FONT_FILE,
+  unpackBrowserFonts,
+} from "./browser/fonts.mjs";
 import { requireDirectory, requireFile } from "./files.mjs";
 import {
   LEGACY_BROWSER_WODITOR_VERSION,
@@ -265,6 +269,22 @@ async function fontRegistrationUpdates(outputDir, metadata, pending) {
   return browserFontUpdates(outputDir, gameRoot, looseFonts);
 }
 
+async function bundledFontRegistrationUpdates(
+  outputDir,
+  metadata,
+  pending,
+  { workDir },
+) {
+  if (metadata.data?.delivery !== "archive")
+    return fontRegistrationUpdates(outputDir, metadata, pending);
+
+  const fonts = await unpackBrowserFonts(
+    join(outputDir, "Data.wolf"),
+    join(workDir, "fonts"),
+  );
+  return browserFontUpdates(outputDir, outputDir, fonts);
+}
+
 async function updateRuntime(updates, zip, metadata, runtimeVersion) {
   const legacy = runtimeVersion === LEGACY_BROWSER_WODITOR_VERSION;
   const wasLegacy =
@@ -296,6 +316,7 @@ const migrations = [
   { version: "2026.11.18", prepare: binaryAssetUpdates },
   { version: "2026.11.18.1", prepare: lazyDirectoryUpdates },
   { version: "2026.11.18.2", prepare: fontRegistrationUpdates },
+  { version: "2026.11.19", prepare: bundledFontRegistrationUpdates },
 ];
 
 async function applyUpdates(outputDir, updates) {
@@ -403,6 +424,7 @@ export async function migrateWebExport({
     );
   } finally {
     await rm(join(lock, "Data.wolf"), { force: true });
+    await rm(join(lock, "fonts"), { recursive: true, force: true });
     await rmdir(lock);
   }
 }
