@@ -1,56 +1,38 @@
-import { lstat, mkdir, open, readdir } from "node:fs/promises";
+import { mkdir, open } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import { PACK_MODES } from "../constants.mjs";
-import { align4, ensureSlice, xorBuffer } from "./binary.mjs";
+import {
+  align4,
+  ensureSlice,
+  xorBuffer,
+  MAX_U32,
+  readOptionalU32,
+} from "./binary.mjs";
+import {
+  DIRECTORY_ATTRIBUTE,
+  FILE_ATTRIBUTE,
+  IO_SIZE,
+  flattenDirectories,
+  flattenFiles,
+  readAt,
+  safeName,
+  scanDirectory,
+} from "./common.mjs";
+import { createLegacyDxKey } from "./crypt-common.mjs";
 import { decodeLz } from "./lz.mjs";
 import { decodeName, encodeName } from "./text.mjs";
 
 const HEADER_SIZE = 28;
 const FILE_HEADER_SIZE = 44;
 const DIRECTORY_SIZE = 16;
-const DIRECTORY_ATTRIBUTE = 0x10;
-const FILE_ATTRIBUTE = 0x20;
-const MAX_U32 = 0xffffffff;
-const IO_SIZE = 1024 * 1024;
 
 function nativeModes() {
   return PACK_MODES.filter((mode) => mode.archiveVersion === 5);
 }
 
 export function createDx5Key(source) {
-  if (source.length !== 12)
-    throw new Error("A DX version 5 key must contain 12 bytes.");
-  const key = Buffer.from(source);
-  key[0] = ~key[0];
-  key[1] = (key[1] >>> 4) | (key[1] << 4);
-  key[2] ^= 0x8a;
-  key[3] = ~((key[3] >>> 4) | (key[3] << 4));
-  key[4] = ~key[4];
-  key[5] ^= 0xac;
-  key[6] = ~key[6];
-  key[7] = ~((key[7] >>> 3) | (key[7] << 5));
-  key[8] = (key[8] >>> 5) | (key[8] << 3);
-  key[9] ^= 0x7f;
-  key[10] = ((key[10] >>> 4) | (key[10] << 4)) ^ 0xd6;
-  key[11] ^= 0xcc;
-  return key;
-}
-
-async function readAt(handle, position, size, label) {
-  const buffer = Buffer.alloc(size);
-  let offset = 0;
-  while (offset < size) {
-    const { bytesRead } = await handle.read(
-      buffer,
-      offset,
-      size - offset,
-      position + offset,
-    );
-    if (bytesRead === 0) throw new Error(`${label} ended unexpectedly.`);
-    offset += bytesRead;
-  }
-  return buffer;
+  return createLegacyDxKey(source, 5);
 }
 
 function parseHeader(buffer, archiveBytes) {
@@ -101,11 +83,6 @@ export function detectDx5Header(
   return undefined;
 }
 
-function readOptionalU32(buffer, offset) {
-  const value = buffer.readUInt32LE(offset);
-  return value === MAX_U32 ? undefined : value;
-}
-
 function parseFileHeader(fileTable, offset) {
   const bytes = ensureSlice(
     fileTable,
@@ -135,20 +112,6 @@ function parseDirectory(directoryTable, offset) {
     fileCount: bytes.readUInt32LE(8),
     fileHeadAddress: bytes.readUInt32LE(12),
   };
-}
-
-function safeName(name) {
-  if (
-    !name ||
-    name === "." ||
-    name === ".." ||
-    name.includes("/") ||
-    name.includes("\\") ||
-    name.includes("\0")
-  ) {
-    throw new Error(`Unsafe file name in archive: ${JSON.stringify(name)}`);
-  }
-  return name;
 }
 
 async function writeDecodedFile({ archive, header, key, file, outputPath }) {
@@ -246,7 +209,9 @@ export async function unpackDx5Archive(
           fileTable,
           directory.fileHeadAddress + index * FILE_HEADER_SIZE,
         );
-        const name = safeName(decodeName(nameTable, file.nameAddress));
+        const name = safeName(
+          decodeName(nameTable, file.nameAddress, header.codePage),
+        );
         const path = join(destination, name);
         if ((file.attributes & DIRECTORY_ATTRIBUTE) !== 0) {
           await extractDirectory(file.dataAddress, path);
@@ -268,55 +233,6 @@ export async function unpackDx5Archive(
   } finally {
     await archive.close();
   }
-}
-
-async function scanDirectory(path, name = "") {
-  const directory = { path, name, entries: [], parent: undefined };
-  const entries = await readdir(path, { withFileTypes: true });
-  entries.sort((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    const entryPath = join(path, entry.name);
-    const details = await lstat(entryPath);
-    if (details.isSymbolicLink())
-      throw new Error(`Symbolic links cannot be packed: ${entryPath}`);
-    if (details.isDirectory()) {
-      const child = await scanDirectory(entryPath, entry.name);
-      child.parent = directory;
-      directory.entries.push(child);
-    } else if (details.isFile()) {
-      if (details.size > MAX_U32)
-        throw new Error(`DX5 files cannot exceed 4 GiB: ${entryPath}`);
-      directory.entries.push({
-        path: entryPath,
-        name: entry.name,
-        size: details.size,
-        parent: directory,
-      });
-    }
-  }
-  return directory;
-}
-
-function flattenDirectories(root) {
-  const directories = [];
-  function visit(directory) {
-    directories.push(directory);
-    for (const entry of directory.entries) if (entry.entries) visit(entry);
-  }
-  visit(root);
-  return directories;
-}
-
-function flattenFiles(root) {
-  const files = [];
-  function visit(directory) {
-    for (const entry of directory.entries) {
-      if (entry.entries) visit(entry);
-      else files.push(entry);
-    }
-  }
-  visit(root);
-  return files;
 }
 
 function writeU32(target, value, offset, label) {
@@ -418,7 +334,7 @@ function createTables(root) {
 export async function packDx5Archive(sourceDir, archivePath, mode) {
   if (mode.archiveVersion !== 5)
     throw new Error(`DX5 packing is not available for ${mode.label}.`);
-  const root = await scanDirectory(sourceDir);
+  const root = await scanDirectory(sourceDir, "", MAX_U32);
   const files = flattenFiles(root);
   let dataSize = 0;
   for (const file of files) {

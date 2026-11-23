@@ -1,3 +1,5 @@
+import { createMsvcRandom, rotateRight8 } from "./crypt-common.mjs";
+
 /*
  * WOLF RPG Editor's DX8 extensions use modified AES-CTR, a generated stream
  * cipher, and (for one format) ChaCha20. This is a JavaScript port of the
@@ -30,18 +32,6 @@ const SBOX = Uint8Array.from([
 const RCON = Uint8Array.from([
   0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36,
 ]);
-
-function rotateRight8(value, bits) {
-  return ((value >>> bits) | (value << (8 - bits))) & 0xff;
-}
-
-function createMsvcRandom(seed) {
-  let state = seed >>> 0;
-  return () => {
-    state = (Math.imul(state, 214013) + 2531011) >>> 0;
-    return (state >>> 16) & 0x7fff;
-  };
-}
 
 function isVersion35(cryptVersion) {
   return (

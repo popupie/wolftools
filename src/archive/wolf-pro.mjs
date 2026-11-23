@@ -1,3 +1,5 @@
+import { createMsvcRandom, rotateRight8 } from "./crypt-common.mjs";
+
 /* WOLF Pro archive-key derivation, ported from UberWolf's MIT-licensed format implementation. */
 
 import { readFile, readdir } from "node:fs/promises";
@@ -13,18 +15,6 @@ const SPECIAL_NAMES = new Set([
   "gamefile",
   "basicdata2",
 ]);
-
-function createMsvcRandom(seed) {
-  let state = seed >>> 0;
-  return () => {
-    state = (Math.imul(state, 214013) + 2531011) >>> 0;
-    return (state >>> 16) & 0x7fff;
-  };
-}
-
-function rotateRight8(value, bits) {
-  return ((value >>> bits) | (value << (8 - bits))) & 0xff;
-}
 
 export function isWolfProKeyArchive(path) {
   return (

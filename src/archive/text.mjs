@@ -1,9 +1,22 @@
 const decoder = new TextDecoder("shift_jis", { fatal: false });
+const nameDecoders = new Map([
+  [932, new TextDecoder("shift_jis", { fatal: true })],
+  [65001, new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })],
+]);
 let reverseMap;
+
+export function nameDecoder(codePage = 932) {
+  // Older archives can omit the code page; retain their CP932 default.
+  const decoder = nameDecoders.get(codePage || 932);
+  if (!decoder)
+    throw new Error(`Unsupported archive filename code page: ${codePage}.`);
+  return decoder;
+}
 
 function addMapping(map, bytes) {
   const text = decoder.decode(Buffer.from(bytes));
-  if (text && !text.includes("\ufffd") && !map.has(text)) map.set(text, Buffer.from(bytes));
+  if (text && !text.includes("\ufffd") && !map.has(text))
+    map.set(text, Buffer.from(bytes));
 }
 
 function shiftJisMap() {
@@ -28,7 +41,8 @@ export function encodeShiftJis(value) {
   const chunks = [];
   for (const character of value) {
     const bytes = map.get(character);
-    if (!bytes) throw new Error(`The file name cannot be encoded as Shift JIS: ${value}`);
+    if (!bytes)
+      throw new Error(`The file name cannot be encoded as Shift JIS: ${value}`);
     chunks.push(bytes);
   }
   return Buffer.concat(chunks);
@@ -57,13 +71,23 @@ export function encodeName(value) {
   return output;
 }
 
-export function decodeName(nameTable, address) {
-  if (address < 0 || address + 4 > nameTable.length) throw new Error("Invalid name address.");
+export function decodeName(nameTable, address, codePage = 932) {
+  if (address < 0 || address + 4 > nameTable.length)
+    throw new Error("Invalid name address.");
   const packs = nameTable.readUInt16LE(address);
   const start = address + 4 + packs * 4;
   const limit = Math.min(start + packs * 4, nameTable.length);
   let end = start;
   while (end < limit && nameTable[end] !== 0) end += 1;
-  if (end === limit && packs !== 0) throw new Error("Archive file name is not terminated.");
-  return decodeShiftJis(nameTable.subarray(start, end));
+  if (end === limit && packs !== 0)
+    throw new Error("Archive file name is not terminated.");
+  try {
+    return nameDecoder(codePage).decode(nameTable.subarray(start, end));
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    throw new Error(
+      `Archive file name cannot be decoded using code page ${codePage || 932}.`,
+      { cause: error },
+    );
+  }
 }

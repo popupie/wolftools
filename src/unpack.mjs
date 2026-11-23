@@ -23,7 +23,12 @@ import { detectDx5Header, unpackDx5Archive } from "./archive/dx5.mjs";
 import { unpackDx6Archive } from "./archive/dx6.mjs";
 import { unpackDx8Archive } from "./archive/dx8.mjs";
 import { findWolfProMode, isWolfProKeyArchive } from "./archive/wolf-pro.mjs";
-import { ensureNewDestination, isArchivePath, listFiles } from "./files.mjs";
+import {
+  ensureNewDestination,
+  isArchivePath,
+  listFiles,
+  requireOutsideDirectory,
+} from "./files.mjs";
 
 async function copyWithoutArchives(source, destination) {
   const details = await stat(source);
@@ -115,9 +120,18 @@ export async function unpackWolf({ sourcePath, outputDir }) {
   const source = resolve(sourcePath);
   const details = await stat(source).catch(() => undefined);
   if (!details) throw new Error(`Input was not found: ${source}`);
-  const destination = await ensureNewDestination(
-    outputDir || join(dirname(source), `${parse(source).name} unpacked`),
-  );
+  const sourceGame = details.isDirectory()
+    ? source
+    : details.isFile() && /Game(?:Pro)?\.exe$/i.test(basename(source))
+      ? dirname(source)
+      : undefined;
+  const defaultSource = sourceGame || source;
+  const requestedDestination =
+    outputDir ||
+    join(dirname(defaultSource), `${parse(defaultSource).name} unpacked`);
+  if (sourceGame)
+    await requireOutsideDirectory(requestedDestination, sourceGame);
+  const destination = await ensureNewDestination(requestedDestination);
 
   try {
     if (details.isFile() && isArchivePath(source)) {
@@ -137,7 +151,6 @@ export async function unpackWolf({ sourcePath, outputDir }) {
       if (!/Game(?:Pro)?\.exe$/i.test(basename(source))) {
         throw new Error("Executable input must be Game.exe or GamePro.exe.");
       }
-      const sourceGame = dirname(source);
       await unpackArchives(sourceGame, destination);
     } else if (details.isDirectory()) {
       await unpackArchives(source, destination);

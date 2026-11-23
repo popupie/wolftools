@@ -1,11 +1,29 @@
-import { lstat, mkdir, open, readdir } from "node:fs/promises";
+import { mkdir, open } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import { DX8_MODES } from "../constants.mjs";
-import { align4, ensureSlice, readU64, writeU64 } from "./binary.mjs";
+import {
+  align4,
+  ensureSlice,
+  readU64,
+  writeU64,
+  MAX_U64,
+  readOptionalU64,
+} from "./binary.mjs";
 import { decodeHuffman, inspectHuffman } from "./huffman.mjs";
+import {
+  DIRECTORY_ATTRIBUTE,
+  FILE_ATTRIBUTE,
+  IO_SIZE,
+  parseDirectory64 as parseDirectory,
+  flattenDirectories,
+  flattenFiles,
+  readAt,
+  safeName,
+  scanDirectory,
+} from "./common.mjs";
 import { decodeLz } from "./lz.mjs";
-import { decodeName, encodeName } from "./text.mjs";
+import { decodeName, encodeName, nameDecoder } from "./text.mjs";
 import {
   createModernCryptContext,
   cryptModernHeader,
@@ -18,12 +36,8 @@ import {
 const HEADER_SIZE = 64;
 const FILE_HEADER_SIZE = 72;
 const DIRECTORY_SIZE = 32;
-const DIRECTORY_ATTRIBUTE = 0x10;
-const FILE_ATTRIBUTE = 0x20;
 const NO_KEY = 0x00000001;
 const NO_HEAD_PRESS = 0x00000002;
-const MAX_U64 = 0xffffffffffffffffn;
-const IO_SIZE = 1024 * 1024;
 const DEFAULT_KEY_STRING = Buffer.from("DXLIBARC", "latin1");
 const MAX_KEY_STRING = 63;
 const MAX_FILE_KEY_STRING = 2040;
@@ -35,22 +49,6 @@ const CRC32_TABLE = Array.from({ length: 256 }, (_, value) => {
   }
   return crc >>> 0;
 });
-
-async function readAt(handle, position, size, label) {
-  const buffer = Buffer.alloc(size);
-  let offset = 0;
-  while (offset < size) {
-    const { bytesRead } = await handle.read(
-      buffer,
-      offset,
-      size - offset,
-      position + offset,
-    );
-    if (bytesRead === 0) throw new Error(`${label} ended unexpectedly.`);
-    offset += bytesRead;
-  }
-  return buffer;
-}
 
 function crc32(source) {
   let crc = 0xffffffff;
@@ -152,11 +150,6 @@ async function readArchiveAt(archive, position, size, label, modern) {
   return modern ? xorModernOuter(source, modern, position) : source;
 }
 
-function readOptionalU64(buffer, offset) {
-  const value = buffer.readBigUInt64LE(offset);
-  return value === MAX_U64 ? undefined : readU64(buffer, offset);
-}
-
 function parseFileHeader(fileTable, offset) {
   const bytes = ensureSlice(fileTable, offset, FILE_HEADER_SIZE, "file header");
   return {
@@ -167,35 +160,6 @@ function parseFileHeader(fileTable, offset) {
     pressDataSize: readOptionalU64(bytes, 56),
     huffPressDataSize: readOptionalU64(bytes, 64),
   };
-}
-
-function parseDirectory(directoryTable, offset) {
-  const bytes = ensureSlice(
-    directoryTable,
-    offset,
-    DIRECTORY_SIZE,
-    "directory header",
-  );
-  return {
-    directoryAddress: readOptionalU64(bytes, 0),
-    parentDirectoryAddress: readOptionalU64(bytes, 8),
-    fileCount: readU64(bytes, 16),
-    fileHeadAddress: readU64(bytes, 24),
-  };
-}
-
-function safeName(name) {
-  if (
-    !name ||
-    name === "." ||
-    name === ".." ||
-    name.includes("/") ||
-    name.includes("\\") ||
-    name.includes("\0")
-  ) {
-    throw new Error(`Unsafe file name in archive: ${JSON.stringify(name)}`);
-  }
-  return name;
 }
 
 function normalizedNameBytes(nameTable, address) {
@@ -231,12 +195,14 @@ function validateTables(tables, header) {
       fileTable,
       root.fileHeadAddress + index * FILE_HEADER_SIZE,
     );
-    decodeName(nameTable, file.nameAddress);
+    decodeName(nameTable, file.nameAddress, header.codePage);
   }
   return { nameTable, fileTable, directoryTable };
 }
 
 async function loadTables(archive, header, archiveBytes, additionalModes = []) {
+  // Report unsupported encodings before trying candidate archive keys.
+  nameDecoder(header.codePage);
   const noKey = (header.flags & NO_KEY) !== 0;
   const noHeadPress = (header.flags & NO_HEAD_PRESS) !== 0;
   const storedSize = noHeadPress
@@ -519,7 +485,9 @@ export async function unpackDx8Archive(archivePath, outputDir, options = {}) {
           fileTable,
           directory.fileHeadAddress + index * FILE_HEADER_SIZE,
         );
-        const name = safeName(decodeName(nameTable, file.nameAddress));
+        const name = safeName(
+          decodeName(nameTable, file.nameAddress, header.codePage),
+        );
         const path = join(destination, name);
         if ((file.attributes & DIRECTORY_ATTRIBUTE) !== 0) {
           await extractDirectory(file.dataAddress, path);
@@ -563,55 +531,6 @@ export async function unpackDx8Archive(archivePath, outputDir, options = {}) {
 }
 
 export const unpackDx8NoKeyArchive = unpackDx8Archive;
-
-async function scanDirectory(path, name = "") {
-  const directory = { path, name, entries: [], parent: undefined };
-  const entries = await readdir(path, { withFileTypes: true });
-  entries.sort((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    const entryPath = join(path, entry.name);
-    const details = await lstat(entryPath);
-    if (details.isSymbolicLink())
-      throw new Error(`Symbolic links cannot be packed: ${entryPath}`);
-    if (details.isDirectory()) {
-      const child = await scanDirectory(entryPath, entry.name);
-      child.parent = directory;
-      directory.entries.push(child);
-    } else if (details.isFile()) {
-      directory.entries.push({
-        path: entryPath,
-        name: entry.name,
-        size: details.size,
-        parent: directory,
-      });
-    }
-  }
-  return directory;
-}
-
-function flattenDirectories(root) {
-  const directories = [];
-  function visit(directory) {
-    directories.push(directory);
-    for (const entry of directory.entries) {
-      if (entry.entries) visit(entry);
-    }
-  }
-  visit(root);
-  return directories;
-}
-
-function flattenFiles(root) {
-  const files = [];
-  function visit(directory) {
-    for (const entry of directory.entries) {
-      if (entry.entries) visit(entry);
-      else files.push(entry);
-    }
-  }
-  visit(root);
-  return files;
-}
 
 function createTables(root) {
   const directories = flattenDirectories(root);

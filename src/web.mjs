@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  access,
   copyFile,
   cp,
   lstat,
@@ -20,7 +19,13 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import JSZip from "jszip";
 
 import { unpackWolf } from "./unpack.mjs";
-import { isArchivePath } from "./files.mjs";
+import {
+  exists,
+  isArchivePath,
+  listFiles as listFilePaths,
+  requireDirectory,
+  requireFile,
+} from "./files.mjs";
 import { inspectFile } from "./inspect.mjs";
 import { browserAudioMetadata } from "./audio.mjs";
 import { createDeferredAudioLoader } from "./browser/deferred-audio.mjs";
@@ -93,60 +98,13 @@ const DEFAULT_GAME_INI = [
   "",
 ].join("\r\n");
 
-async function exists(path) {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function requireFile(path, label) {
-  let details;
-  try {
-    details = await stat(path);
-  } catch {
-    throw new Error(`${label} was not found: ${path}`);
-  }
-  if (!details.isFile()) {
-    throw new Error(`${label} is not a file: ${path}`);
-  }
-}
-
-async function requireDirectory(path, label) {
-  let details;
-  try {
-    details = await stat(path);
-  } catch {
-    throw new Error(`${label} was not found: ${path}`);
-  }
-  if (!details.isDirectory()) {
-    throw new Error(`${label} is not a directory: ${path}`);
-  }
-}
-
 function webPath(path) {
   return path.split(sep).join("/");
 }
 
-async function listFiles(root, current = root, { rejectLinks = false } = {}) {
-  const entries = await readdir(current, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries.sort((left, right) =>
-    left.name.localeCompare(right.name),
-  )) {
-    const path = join(current, entry.name);
-    if (rejectLinks && entry.isSymbolicLink()) {
-      throw new Error(`Shared game assets cannot be symbolic links: ${path}`);
-    }
-    if (entry.isDirectory()) {
-      files.push(...(await listFiles(root, path, { rejectLinks })));
-    } else if (entry.isFile()) {
-      files.push(webPath(relative(root, path)));
-    }
-  }
-  return files;
+async function listFiles(root, current = root, options) {
+  const files = await listFilePaths(root, current, options);
+  return files.map((path) => webPath(relative(root, path)));
 }
 
 function sha256(bytes) {
@@ -466,25 +424,15 @@ async function sourceKind(sourceDir) {
   return "prepared";
 }
 
-async function copyPreparedRelease(sourceDir, outputDir) {
-  for (const filename of SOURCE_FILES) {
-    const sourcePath = join(sourceDir, filename);
-    if (await exists(sourcePath)) {
-      await cp(sourcePath, join(outputDir, filename), { dereference: true });
-    }
-  }
-
-  const saveDir = join(sourceDir, "Save");
-  if (await exists(saveDir)) {
-    await cp(saveDir, join(outputDir, "Save"), {
-      recursive: true,
-      dereference: true,
-    });
-  }
-}
-
-async function copyGameSupportFiles(sourceDir, outputDir) {
-  for (const filename of SOURCE_FILES.filter((name) => name !== "Data.wolf")) {
+async function copyGameFiles(
+  sourceDir,
+  outputDir,
+  { includeArchive = false } = {},
+) {
+  const files = includeArchive
+    ? SOURCE_FILES
+    : SOURCE_FILES.filter((name) => name !== "Data.wolf");
+  for (const filename of files) {
     const sourcePath = join(sourceDir, filename);
     if (await exists(sourcePath)) {
       await cp(sourcePath, join(outputDir, filename), { dereference: true });
@@ -583,7 +531,7 @@ async function createLooseBrowserData(sourceDir, outputDir, runtimeVersion) {
       `${JSON.stringify(manifest)}\n`,
     );
 
-    await copyGameSupportFiles(sourceDir, outputDir);
+    await copyGameFiles(sourceDir, outputDir);
     await addLazyAssetLoader(outputDir, { runtimeVersion });
     return manifest;
   } finally {
@@ -791,7 +739,7 @@ export async function packageWolfGame({
       };
     } else {
       process.stdout.write("Copying creator export...\n");
-      await copyPreparedRelease(source, staging);
+      await copyGameFiles(source, staging, { includeArchive: true });
       fontFiles = await unpackBrowserFonts(
         join(staging, "Data.wolf"),
         packedFontDir,
