@@ -193,8 +193,7 @@ wolftools unpack "/path/to/Game.exe" -o "./output/Unpacked Game"
 If you omit `--out`, wolftools creates a sibling folder named after the input
 with ` unpacked` appended.
 
-These standard WOLF archive formats are supported. This table does not mean
-that Pro packing is supported.
+These standard WOLF archive formats are supported.
 
 | Standard editor family | Archive format          | Pack | Unpack |
 | ---------------------- | ----------------------- | ---- | ------ |
@@ -209,6 +208,9 @@ that Pro packing is supported.
 
 Support includes encrypted archive tables, file keys, LZ compression, Huffman
 compression, and partial Huffman compression.
+
+Legacy DX3 and DX4 archives can also be unpacked with the supported WOLF
+legacy keys.
 
 Pro archives need their matching key archive beside them. wolftools supports
 legacy Pro, Pro ChaCha2, and supported Pro 3.x key formats. You can pass a game

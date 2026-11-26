@@ -36,23 +36,27 @@ export function createDx5Key(source) {
 }
 
 function parseHeader(buffer, archiveBytes) {
-  if (buffer.length !== HEADER_SIZE)
-    throw new Error("Invalid DX version 5 header size.");
-  if (buffer.toString("ascii", 0, 2) !== "DX" || buffer.readUInt16LE(2) !== 5) {
-    throw new Error("Not a DX version 5 archive.");
+  if (buffer.length < 24) throw new Error("Invalid legacy DX header size.");
+  const version = buffer.readUInt16LE(2);
+  if (buffer.toString("ascii", 0, 2) !== "DX" || ![3, 4, 5].includes(version)) {
+    throw new Error("Not a DX version 3, 4, or 5 archive.");
   }
+  const headerSize = version === 3 ? 24 : HEADER_SIZE;
+  if (buffer.length < headerSize)
+    throw new Error(`Invalid DX version ${version} header size.`);
   const header = {
+    version,
     headSize: buffer.readUInt32LE(4),
     dataStart: buffer.readUInt32LE(8),
     nameTableStart: buffer.readUInt32LE(12),
     fileTableStart: buffer.readUInt32LE(16),
     directoryTableStart: buffer.readUInt32LE(20),
-    codePage: buffer.readUInt32LE(24),
+    codePage: version >= 4 ? buffer.readUInt32LE(24) : 932,
   };
-  if (header.dataStart !== HEADER_SIZE)
-    throw new Error("Unsupported DX5 data start address.");
+  if (header.dataStart !== headerSize)
+    throw new Error("Unsupported legacy DX data start address.");
   if (
-    header.nameTableStart < HEADER_SIZE ||
+    header.nameTableStart < headerSize ||
     header.nameTableStart + header.headSize > archiveBytes
   ) {
     throw new Error("The DX5 header table is outside the archive.");
@@ -116,6 +120,8 @@ function parseDirectory(directoryTable, offset) {
 
 async function writeDecodedFile({ archive, header, key, file, outputPath }) {
   const dataPosition = header.dataStart + file.dataAddress;
+  // DX3/4 encrypt the whole archive as one stream; DX5 restarts per file.
+  const keyPosition = header.version < 5 ? dataPosition : file.dataSize;
   const storedSize = file.pressDataSize ?? file.dataSize;
   if (
     dataPosition < header.dataStart ||
@@ -136,7 +142,7 @@ async function writeDecodedFile({ archive, header, key, file, outputPath }) {
         file.pressDataSize,
         "Compressed file data",
       );
-      const compressed = xorBuffer(encrypted, key, file.dataSize);
+      const compressed = xorBuffer(encrypted, key, keyPosition);
       const decoded = decodeLz(compressed, file.dataSize);
       await output.write(decoded, 0, decoded.length, 0);
       return;
@@ -150,7 +156,7 @@ async function writeDecodedFile({ archive, header, key, file, outputPath }) {
         size,
         "File data",
       );
-      const decoded = xorBuffer(encrypted, key, file.dataSize + offset);
+      const decoded = xorBuffer(encrypted, key, keyPosition + offset);
       await output.write(decoded, 0, decoded.length, offset);
       offset += size;
     }
@@ -176,7 +182,7 @@ export async function unpackDx5Archive(
     const detected = detectDx5Header(encryptedHeader, details.size);
     if (!detected)
       throw new Error(
-        "The archive is not a supported native DX version 5 archive.",
+        "The archive is not a supported native DX version 3, 4, or 5 archive.",
       );
     const { header, key, mode } = detected;
     const encryptedTables = await readAt(
@@ -185,7 +191,11 @@ export async function unpackDx5Archive(
       header.headSize,
       "Archive tables",
     );
-    const tables = xorBuffer(encryptedTables, key, 0);
+    const tables = xorBuffer(
+      encryptedTables,
+      key,
+      header.version < 5 ? header.nameTableStart : 0,
+    );
     const nameTable = tables.subarray(0, header.fileTableStart);
     const fileTable = tables.subarray(
       header.fileTableStart,
@@ -229,7 +239,7 @@ export async function unpackDx5Archive(
     }
 
     await extractDirectory(0, outputDir);
-    return { files, archiveVersion: 5, mode };
+    return { files, archiveVersion: header.version, mode };
   } finally {
     await archive.close();
   }

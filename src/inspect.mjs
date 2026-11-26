@@ -82,7 +82,7 @@ export async function inspectFile(path, options = {}) {
     start.length >= 49 && start.toString("ascii", 0, 2) === "DX";
   if (!clearHeader) {
     const dx5 =
-      start.length >= 28
+      start.length >= 24
         ? detectDx5Header(start.subarray(0, 28), details.size)
         : undefined;
     const dx6 =
@@ -94,7 +94,7 @@ export async function inspectFile(path, options = {}) {
       ...result,
       type: "wolf archive",
       header: native ? "encrypted" : "encrypted or obfuscated",
-      archiveVersion: dx5 ? 5 : dx6 ? 6 : undefined,
+      archiveVersion: dx5 ? dx5.header.version : dx6 ? 6 : undefined,
       cryptVersion: undefined,
       mode: native?.mode.label,
       native: Boolean(native),

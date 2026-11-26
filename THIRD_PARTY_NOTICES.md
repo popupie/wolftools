@@ -8,6 +8,9 @@ Portions of the WOLF archive encryption and WOLF RPG Editor Pro key
 compatibility are based on UberWolf by Sinflower, used under the MIT license:
 https://github.com/Sinflower/UberWolf
 
+Legacy DX3/DX4 format compatibility also references the DXArchive definitions in WolfDec:
+https://github.com/Sinflower/WolfDec
+
 Copyright (c) 2023 Sinflower
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

@@ -20,7 +20,7 @@ import {
 } from "node:path";
 
 import { detectDx5Header, unpackDx5Archive } from "./archive/dx5.mjs";
-import { unpackDx6Archive } from "./archive/dx6.mjs";
+import { detectDx6Header, unpackDx6Archive } from "./archive/dx6.mjs";
 import { unpackDx8Archive } from "./archive/dx8.mjs";
 import { findWolfProMode, isWolfProKeyArchive } from "./archive/wolf-pro.mjs";
 import {
@@ -101,19 +101,35 @@ async function readCryptVersion(archivePath) {
 export async function unpackArchive(archivePath, outputDir, options) {
   const archive = await open(archivePath, "r");
   let prefix;
+  let archiveBytes;
   try {
     prefix = Buffer.alloc(48);
-    await archive.read(prefix, 0, prefix.length, 0);
+    const { bytesRead } = await archive.read(prefix, 0, prefix.length, 0);
+    prefix = prefix.subarray(0, bytesRead);
+    archiveBytes = (await archive.stat()).size;
   } finally {
     await archive.close();
   }
-  if (prefix.toString("ascii", 0, 2) === "DX" && prefix.readUInt16LE(2) === 8) {
-    return unpackDx8Archive(archivePath, outputDir, options);
+  try {
+    if (
+      prefix.length >= 4 &&
+      prefix.toString("ascii", 0, 2) === "DX" &&
+      prefix.readUInt16LE(2) === 8
+    ) {
+      return await unpackDx8Archive(archivePath, outputDir, options);
+    }
+    if (detectDx5Header(prefix.subarray(0, 28), archiveBytes)) {
+      return await unpackDx5Archive(archivePath, outputDir, options);
+    }
+    if (detectDx6Header(prefix, archiveBytes)) {
+      return await unpackDx6Archive(archivePath, outputDir, options);
+    }
+    throw new Error("The archive format or encryption key is not supported.");
+  } catch (error) {
+    throw new Error(`Could not unpack ${archivePath}: ${error.message}`, {
+      cause: error,
+    });
   }
-  if (detectDx5Header(prefix.subarray(0, 28))) {
-    return unpackDx5Archive(archivePath, outputDir, options);
-  }
-  return unpackDx6Archive(archivePath, outputDir, options);
 }
 
 export async function unpackWolf({ sourcePath, outputDir }) {
