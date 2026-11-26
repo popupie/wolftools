@@ -1,9 +1,22 @@
 const decoder = new TextDecoder("shift_jis", { fatal: false });
 const nameDecoders = new Map([
   [932, new TextDecoder("shift_jis", { fatal: true })],
+  [1252, { decode: decodeWindows1252 }],
   [65001, new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })],
 ]);
 let reverseMap;
+
+function decodeWindows1252(bytes) {
+  // Some Node versions decode windows-1252 as Latin-1, losing punctuation.
+  // https://encoding.spec.whatwg.org/index-windows-1252.txt
+  const extensions =
+    "€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008dŽ\u008f" +
+    "\u0090‘’“”•–—˜™š›œ\u009džŸ";
+  return Buffer.from(bytes).toString("latin1").replace(
+    /[\u0080-\u009f]/g,
+    (character) => extensions[character.charCodeAt(0) - 0x80],
+  );
+}
 
 export function nameDecoder(codePage = 932) {
   // Older archives can omit the code page; retain their CP932 default.
