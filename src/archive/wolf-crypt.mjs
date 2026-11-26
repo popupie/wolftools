@@ -422,7 +422,7 @@ function createXorShift(seed) {
 }
 
 function modernBodySize(cryptVersion, password, archiveSize, proKey) {
-  if (!isVersion35(cryptVersion)) return 0x400;
+  if (!isVersion35(cryptVersion)) return Math.min(0x400, archiveSize - 64);
   let seed =
     cryptVersion >= 1020
       ? (proKey[0] * proKey[1] + password[2] * password[4] + password[11]) >>> 0

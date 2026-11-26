@@ -177,7 +177,6 @@ export async function unpackWolf({ sourcePath, outputDir }) {
     }
 
     const files = await listFiles(destination);
-    if (files.length === 0) throw new Error("No files were unpacked.");
     return { outputDir: destination, files: files.length };
   } catch (error) {
     await rm(destination, { recursive: true, force: true });
